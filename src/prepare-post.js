@@ -310,27 +310,6 @@ async function waitForManualPublishConfirmation() {
   }
 }
 
-async function waitForManualPublishConfirmation() {
-  const terminal = readline.createInterface({
-    input: stdin,
-    output: stdout
-  });
-
-  try {
-    console.log('');
-    console.log(
-      'Review the Facebook post and publish it manually.'
-    );
-    console.log(
-      'After publishing, return to Terminal and press Enter.'
-    );
-
-    await terminal.question('');
-  } finally {
-    terminal.close();
-  }
-}
-
 export async function prepareGroupPost(
   stt,
   groupSelection = 'next'
