@@ -1,0 +1,13 @@
+{
+  "name": "facebook-post-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Command-triggered Facebook Group post preparation bot using deterministic Playwright automation.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "playwright-core": "^1.55.0"
+  }
+}
