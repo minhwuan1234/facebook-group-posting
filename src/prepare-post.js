@@ -1,9 +1,5 @@
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import {
-  acquireJobLock,
-  releaseJobLock
-} from './job-lock.js';
+import { pathToFileURL } from 'node:url';
 
 import {
   getPreparedPostData
@@ -16,6 +12,11 @@ import {
 import {
   openFacebookComposer
 } from './open-composer.js';
+
+import {
+  acquireJobLock,
+  releaseJobLock
+} from './job-lock.js';
 
 function normaliseContent(value) {
   return String(value)
@@ -66,12 +67,25 @@ async function uploadComposerImage(
   imagePath
 ) {
   console.log('Uploading image...');
+  console.log(`Image path: ${imagePath}`);
 
-  const fileInputs = [
-    composerDialog.locator('input[type="file"]'),
+  const fileInputCandidates = [
+    composerDialog.locator(
+      'input[type="file"][accept*="image"]'
+    ),
+
+    composerDialog.locator(
+      'input[type="file"]'
+    ),
+
+    page.locator(
+      '[role="dialog"] input[type="file"][accept*="image"]'
+    ),
+
     page.locator(
       '[role="dialog"] input[type="file"]'
     ),
+
     page.locator(
       'input[type="file"][accept*="image"]'
     )
@@ -79,7 +93,7 @@ async function uploadComposerImage(
 
   let fileInput = null;
 
-  for (const candidate of fileInputs) {
+  for (const candidate of fileInputCandidates) {
     const count = await candidate.count();
 
     if (count > 0) {
@@ -91,7 +105,8 @@ async function uploadComposerImage(
   if (!fileInput) {
     throw new Error(
       [
-        'Could not find the image upload input.',
+        'Could not find the Facebook image upload input.',
+        '',
         'Inspect the open composer manually.',
         'The Post button has not been clicked.'
       ].join('\n')
@@ -104,27 +119,25 @@ async function uploadComposerImage(
     'Image file selected. Waiting for Facebook preview...'
   );
 
-  const previewCandidates = [
-    composerDialog.locator('img[src^="blob:"]'),
-    composerDialog.locator(
-      'img[src*="fbcdn.net"]'
-    ),
-    composerDialog.locator(
-      '[role="img"]'
-    )
-  ];
-
   const uploadDeadline = Date.now() + 120_000;
 
   while (Date.now() < uploadDeadline) {
-    for (const preview of previewCandidates) {
-      const count = await preview.count();
+    const previewCandidates = [
+      composerDialog.locator('img[src^="blob:"]'),
+      composerDialog.locator('img[src*="fbcdn.net"]'),
+      composerDialog.locator(
+        '[role="img"][style*="background-image"]'
+      )
+    ];
+
+    for (const candidate of previewCandidates) {
+      const count = await candidate.count();
 
       for (let index = 0; index < count; index += 1) {
-        const item = preview.nth(index);
+        const preview = candidate.nth(index);
 
         if (
-          await item.isVisible().catch(() => false)
+          await preview.isVisible().catch(() => false)
         ) {
           console.log(
             'Image preview detected successfully.'
@@ -153,6 +166,7 @@ export async function prepareGroupPost(
   groupNumber = 1
 ) {
   const numericStt = Number(stt);
+  const numericGroupNumber = Number(groupNumber);
 
   if (
     !Number.isInteger(numericStt) ||
@@ -163,16 +177,14 @@ export async function prepareGroupPost(
     );
   }
 
-  const numericGroupNumber = Number(groupNumber);
-
-if (
-  !Number.isInteger(numericGroupNumber) ||
-  numericGroupNumber <= 0
-) {
-  throw new Error(
-    'Group number must be a positive integer.'
-  );
-}
+  if (
+    !Number.isInteger(numericGroupNumber) ||
+    numericGroupNumber <= 0
+  ) {
+    throw new Error(
+      'Group number must be a positive integer.'
+    );
+  }
 
   console.log(
     `Loading post data for STT ${numericStt}...`
@@ -195,30 +207,25 @@ if (
   }
 
   if (
-  numericGroupNumber >
-  groupResult.groups.length
-) {
-  throw new Error(
-    [
-      `Invalid group number: ${numericGroupNumber}.`,
-      `Post STT ${numericStt} has only ${groupResult.groups.length} enabled groups.`,
-      '',
-      `Valid range: 1-${groupResult.groups.length}`
-    ].join('\n')
-  );
-}
+    numericGroupNumber >
+    groupResult.groups.length
+  ) {
+    throw new Error(
+      [
+        `Invalid group number: ${numericGroupNumber}.`,
+        `Post STT ${numericStt} has only ${groupResult.groups.length} enabled groups.`,
+        '',
+        `Valid range: 1-${groupResult.groups.length}`
+      ].join('\n')
+    );
+  }
 
-const targetGroup =
-  groupResult.groups[numericGroupNumber - 1];
-
-console.log('');
-console.log(
-  `Preparing group ${numericGroupNumber} of ${groupResult.groups.length}:`
-);
+  const targetGroup =
+    groupResult.groups[numericGroupNumber - 1];
 
   console.log('');
   console.log(
-    `Testing first group of ${groupResult.groups.length}:`
+    `Preparing group ${numericGroupNumber} of ${groupResult.groups.length}:`
   );
   console.log(
     `${targetGroup.groupKey} — ${targetGroup.name}`
@@ -229,10 +236,10 @@ console.log(
     await openFacebookComposer(targetGroup);
 
   const {
-  page,
-  composerDialog,
-  composerEditor
-} = composerSession;
+    page,
+    composerDialog,
+    composerEditor
+  } = composerSession;
 
   console.log('');
   console.log('Inserting JD content...');
@@ -266,14 +273,18 @@ console.log(
       ].join('\n')
     );
   }
-  console.log('');
-console.log('JD content verified successfully.');
 
-await uploadComposerImage(
-  page,
-  composerDialog,
-  preparedPost.image.absolutePath
-);
+  console.log(
+    'JD content verified successfully.'
+  );
+
+  console.log('');
+
+  await uploadComposerImage(
+    page,
+    composerDialog,
+    preparedPost.image.absolutePath
+  );
 
   console.log('');
   console.log('Post preparation test passed.');
@@ -285,16 +296,20 @@ await uploadComposerImage(
     `Group: ${targetGroup.groupKey}`
   );
   console.log(
-    `Image ready: ${preparedPost.image.relativePath}`
+    `Image: ${preparedPost.image.relativePath}`
   );
 
   console.log('');
   console.log('JD content has been inserted.');
-  console.log('Image has been uploaded successfully.');
   console.log(
-  `Prepared group ${numericGroupNumber} of ${groupResult.groups.length}.`
-);
-  console.log('The Post button was not clicked.');
+    'Image has been uploaded successfully.'
+  );
+  console.log(
+    `Prepared group ${numericGroupNumber} of ${groupResult.groups.length}.`
+  );
+  console.log(
+    'The Post button was not clicked.'
+  );
   console.log(
     'Chrome will remain open for manual inspection.'
   );
@@ -304,12 +319,13 @@ await uploadComposerImage(
     preparedPost,
     targetGroup,
     groupNumber: numericGroupNumber,
-totalGroups: groupResult.groups.length
+    totalGroups: groupResult.groups.length
   };
 }
 
 async function run() {
   const stt = process.argv[2];
+
   const groupNumber =
     process.argv[3] || '1';
 
@@ -331,13 +347,12 @@ async function run() {
     return;
   }
 
-  let lockHandle;
+  let lockHandle = null;
 
   try {
     lockHandle = await acquireJobLock({
       stt: Number(stt),
-      groupNumber:
-        Number(groupNumber)
+      groupNumber: Number(groupNumber)
     });
 
     console.log(
@@ -358,14 +373,37 @@ async function run() {
     process.exitCode = 1;
   } finally {
     if (lockHandle) {
-      await releaseJobLock(
-        lockHandle
-      ).catch((error) => {
+      try {
+        await releaseJobLock(lockHandle);
+
+        console.log(
+          'Facebook job lock released.'
+        );
+      } catch (error) {
         console.error(
           'Could not release Facebook job lock.'
         );
         console.error(error.message);
-      });
+      }
     }
   }
+}
+
+/*
+ * Run CLI only when this file is executed directly:
+ *
+ * node src/prepare-post.js 1 1
+ *
+ * This comparison is more reliable than comparing raw filesystem paths
+ * with import.meta.url.
+ */
+const isDirectExecution =
+  process.argv[1] &&
+  import.meta.url ===
+    pathToFileURL(
+      path.resolve(process.argv[1])
+    ).href;
+
+if (isDirectExecution) {
+  await run();
 }
