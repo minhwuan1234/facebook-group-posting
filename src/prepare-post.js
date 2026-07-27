@@ -144,8 +144,9 @@ async function uploadComposerImage(
   );
 }
 
-export async function prepareFirstGroupPost(
-  stt
+export async function prepareGroupPost(
+  stt,
+  groupNumber = 1
 ) {
   const numericStt = Number(stt);
 
@@ -157,6 +158,17 @@ export async function prepareFirstGroupPost(
       'STT must be a positive integer.'
     );
   }
+
+  const numericGroupNumber = Number(groupNumber);
+
+if (
+  !Number.isInteger(numericGroupNumber) ||
+  numericGroupNumber <= 0
+) {
+  throw new Error(
+    'Group number must be a positive integer.'
+  );
+}
 
   console.log(
     `Loading post data for STT ${numericStt}...`
@@ -178,7 +190,27 @@ export async function prepareFirstGroupPost(
     );
   }
 
-  const targetGroup = groupResult.groups[0];
+  if (
+  numericGroupNumber >
+  groupResult.groups.length
+) {
+  throw new Error(
+    [
+      `Invalid group number: ${numericGroupNumber}.`,
+      `Post STT ${numericStt} has only ${groupResult.groups.length} enabled groups.`,
+      '',
+      `Valid range: 1-${groupResult.groups.length}`
+    ].join('\n')
+  );
+}
+
+const targetGroup =
+  groupResult.groups[numericGroupNumber - 1];
+
+console.log('');
+console.log(
+  `Preparing group ${numericGroupNumber} of ${groupResult.groups.length}:`
+);
 
   console.log('');
   console.log(
@@ -255,7 +287,9 @@ await uploadComposerImage(
   console.log('');
   console.log('JD content has been inserted.');
   console.log('Image has been uploaded successfully.');
-  console.log('Only the first group was processed.');
+  console.log(
+  `Prepared group ${numericGroupNumber} of ${groupResult.groups.length}.`
+);
   console.log('The Post button was not clicked.');
   console.log(
     'Chrome will remain open for manual inspection.'
@@ -265,23 +299,26 @@ await uploadComposerImage(
     ...composerSession,
     preparedPost,
     targetGroup,
-    totalGroups:
-      groupResult.groups.length
+    groupNumber: numericGroupNumber,
+totalGroups: groupResult.groups.length
   };
 }
 
 async function run() {
   const stt = process.argv[2];
-
+const groupNumber = process.argv[3] || '1';
   if (!stt) {
     console.error(
       [
-        'Usage:',
-        'node src/prepare-post.js <stt>',
-        '',
-        'Example:',
-        'node src/prepare-post.js 1'
-      ].join('\n')
+  'Usage:',
+  'node src/prepare-post.js <stt> <group-number>',
+  '',
+  'Examples:',
+  'node src/prepare-post.js 1 1',
+  'node src/prepare-post.js 1 2',
+  '',
+  'group-number defaults to 1 when omitted.'
+].join('\n')
     );
 
     process.exitCode = 1;
@@ -289,7 +326,10 @@ async function run() {
   }
 
   try {
-    await prepareFirstGroupPost(stt);
+    await prepareGroupPost(
+  stt,
+  groupNumber
+);
   } catch (error) {
     console.error('');
     console.error(
