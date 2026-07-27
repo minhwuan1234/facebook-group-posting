@@ -128,12 +128,30 @@ async function resolveGroup(groupInput) {
 
 async function findComposerTrigger(page) {
   const textPattern =
-    /write something|create post|what's on your mind|viết gì đó|tạo bài viết|bạn đang nghĩ gì/i;
+    /bạn viết gì đi|viết gì đó|tạo bài viết|bạn đang nghĩ gì|write something|create post|what's on your mind/i;
 
   const candidates = [
+    // Giao diện Facebook tiếng Việt hiện tại:
+    // vùng "Bạn viết gì đi..." thường nằm trong một role="button".
+    page
+      .locator('[role="button"]')
+      .filter({
+        hasText: /bạn viết gì đi/i
+      }),
+
+    page
+      .locator('[role="button"]')
+      .filter({
+        hasText: /viết gì đó|tạo bài viết|bạn đang nghĩ gì/i
+      }),
+
     page.getByRole('button', {
       name: textPattern
     }),
+
+    page.locator(
+      '[role="button"][aria-label*="Bạn viết gì đi" i]'
+    ),
 
     page.locator(
       '[role="button"][aria-label*="Write something" i]'
@@ -158,7 +176,6 @@ async function findComposerTrigger(page) {
 
   return firstVisibleLocator(candidates);
 }
-
 async function findComposerDialog(page) {
   const candidates = [
     page.locator(
