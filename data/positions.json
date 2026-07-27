@@ -1,0 +1,22 @@
+{
+  "positions": [
+    {
+      "id": "content-creator",
+      "name": "Content Creator",
+      "image": "assets/positions/content-creator.jpg",
+      "enabled": true
+    },
+    {
+      "id": "motion-designer",
+      "name": "Motion Designer",
+      "image": "assets/positions/motion-designer.jpg",
+      "enabled": true
+    },
+    {
+      "id": "project-manager",
+      "name": "Project Manager",
+      "image": "assets/positions/project-manager.jpg",
+      "enabled": true
+    }
+  ]
+}
