@@ -1,5 +1,3 @@
-import readline from 'node:readline/promises';
-import { stdin, stdout } from 'node:process';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -289,25 +287,160 @@ async function resolveTargetGroup(
   };
 }
 
-async function waitForManualPublishConfirmation() {
-  const terminal = readline.createInterface({
-    input: stdin,
-    output: stdout
+async function publishFacebookPost(
+  page,
+  composerDialog
+) {
+  console.log('');
+  console.log('Searching for the Facebook Post button...');
+
+  const postButtonCandidates = [
+    composerDialog.getByRole('button', {
+      name: /^(đăng|post)$/i
+    }),
+
+    composerDialog.locator(
+      '[role="button"][aria-label="Đăng"]'
+    ),
+
+    composerDialog.locator(
+      '[role="button"][aria-label="Post"]'
+    ),
+
+    page.getByRole('button', {
+      name: /^(đăng|post)$/i
+    })
+  ];
+
+  let postButton = null;
+
+  for (const candidate of postButtonCandidates) {
+    const count = await candidate.count();
+
+    for (let index = 0; index < count; index += 1) {
+      const button = candidate.nth(index);
+
+      const isVisible = await button
+        .isVisible()
+        .catch(() => false);
+
+      if (!isVisible) {
+        continue;
+      }
+
+      postButton = button;
+      break;
+    }
+
+    if (postButton) {
+      break;
+    }
+  }
+
+  if (!postButton) {
+    throw new Error(
+      [
+        'Could not find the Facebook Post button.',
+        '',
+        'The post was not published.',
+        'Inspect the open composer manually.'
+      ].join('\n')
+    );
+  }
+
+  const isDisabled = await postButton
+    .isDisabled()
+    .catch(() => false);
+
+  if (isDisabled) {
+    throw new Error(
+      [
+        'The Facebook Post button is currently disabled.',
+        '',
+        'Possible causes:',
+        '1. The image is still uploading.',
+        '2. Facebook requires another field.',
+        '3. The group requires a topic or post type.',
+        '4. Facebook has shown a warning.',
+        '',
+        'The post was not published.'
+      ].join('\n')
+    );
+  }
+
+  console.log('Post button found.');
+  console.log('Publishing Facebook post...');
+
+  await postButton.click({
+    timeout: 15_000
   });
 
-  try {
-    console.log('');
-    console.log(
-      'Review the Facebook post and publish it manually.'
-    );
-    console.log(
-      'After the post is published, return here and press Enter.'
+  const publishDeadline = Date.now() + 90_000;
+
+  while (Date.now() < publishDeadline) {
+    const dialogVisible = await composerDialog
+      .isVisible()
+      .catch(() => false);
+
+    if (!dialogVisible) {
+      console.log(
+        'Composer closed after publishing.'
+      );
+
+      return {
+        status: 'submitted'
+      };
+    }
+
+    const pendingApproval = page.getByText(
+      /pending approval|awaiting approval|chờ phê duyệt|đang chờ duyệt|quản trị viên phê duyệt/i
     );
 
-    await terminal.question('');
-  } finally {
-    terminal.close();
+    if (
+      await pendingApproval
+        .first()
+        .isVisible()
+        .catch(() => false)
+    ) {
+      console.log(
+        'Post submitted and is waiting for group approval.'
+      );
+
+      return {
+        status: 'pending_approval'
+      };
+    }
+
+    const errorMessage = page.getByText(
+      /couldn't post|unable to post|something went wrong|không thể đăng|đã xảy ra lỗi|thử lại/i
+    );
+
+    if (
+      await errorMessage
+        .first()
+        .isVisible()
+        .catch(() => false)
+    ) {
+      throw new Error(
+        [
+          'Facebook displayed an error after clicking Post.',
+          '',
+          'The post could not be confirmed as submitted.'
+        ].join('\n')
+      );
+    }
+
+    await page.waitForTimeout(1000);
   }
+
+  throw new Error(
+    [
+      'The Post button was clicked, but submission could not be verified.',
+      '',
+      'Progress has not been updated.',
+      'Inspect Facebook manually before retrying.'
+    ].join('\n')
+  );
 }
 
 export async function prepareGroupPost(
@@ -434,7 +567,11 @@ export async function prepareGroupPost(
     preparedPost.image.absolutePath
   );
 
-await waitForManualPublishConfirmation();
+const publishResult =
+  await publishFacebookPost(
+    page,
+    composerDialog
+  );
 
 const updatedProgress =
   await markGroupPrepared({
@@ -445,7 +582,11 @@ const updatedProgress =
 
 console.log('');
 console.log(
-  'Manual publish confirmed.'
+  'Facebook post submitted successfully.'
+);
+
+console.log(
+  `Publish status: ${publishResult.status}`
 );
 
 console.log(
@@ -496,7 +637,7 @@ console.log(
   );
 
   console.log(
-    'The Post button was not clicked.'
+     `Publish status: ${publishResult.status}`
   );
 
 
