@@ -1,5 +1,9 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  acquireJobLock,
+  releaseJobLock
+} from './job-lock.js';
 
 import {
   getPreparedPostData
@@ -306,30 +310,44 @@ totalGroups: groupResult.groups.length
 
 async function run() {
   const stt = process.argv[2];
-const groupNumber = process.argv[3] || '1';
+  const groupNumber =
+    process.argv[3] || '1';
+
   if (!stt) {
     console.error(
       [
-  'Usage:',
-  'node src/prepare-post.js <stt> <group-number>',
-  '',
-  'Examples:',
-  'node src/prepare-post.js 1 1',
-  'node src/prepare-post.js 1 2',
-  '',
-  'group-number defaults to 1 when omitted.'
-].join('\n')
+        'Usage:',
+        'node src/prepare-post.js <stt> <group-number>',
+        '',
+        'Examples:',
+        'node src/prepare-post.js 1 1',
+        'node src/prepare-post.js 1 2',
+        '',
+        'group-number defaults to 1 when omitted.'
+      ].join('\n')
     );
 
     process.exitCode = 1;
     return;
   }
 
+  let lockHandle;
+
   try {
+    lockHandle = await acquireJobLock({
+      stt: Number(stt),
+      groupNumber:
+        Number(groupNumber)
+    });
+
+    console.log(
+      'Facebook job lock acquired.'
+    );
+
     await prepareGroupPost(
-  stt,
-  groupNumber
-);
+      stt,
+      groupNumber
+    );
   } catch (error) {
     console.error('');
     console.error(
@@ -338,16 +356,16 @@ const groupNumber = process.argv[3] || '1';
     console.error(error.message);
 
     process.exitCode = 1;
+  } finally {
+    if (lockHandle) {
+      await releaseJobLock(
+        lockHandle
+      ).catch((error) => {
+        console.error(
+          'Could not release Facebook job lock.'
+        );
+        console.error(error.message);
+      });
+    }
   }
-}
-
-const currentFilePath =
-  fileURLToPath(import.meta.url);
-
-const executedFilePath = process.argv[1]
-  ? path.resolve(process.argv[1])
-  : null;
-
-if (executedFilePath === currentFilePath) {
-  await run();
 }
