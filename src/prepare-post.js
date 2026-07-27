@@ -18,6 +18,11 @@ import {
   releaseJobLock
 } from './job-lock.js';
 
+import {
+  getPostProgress,
+  markGroupPrepared
+} from './post-progress.js';
+
 function normaliseContent(value) {
   return String(value)
     .replace(/\r\n/g, '\n')
@@ -25,10 +30,14 @@ function normaliseContent(value) {
     .trim();
 }
 
-async function readComposerContent(composerEditor) {
-  const tagName = await composerEditor.evaluate(
-    (element) => element.tagName.toLowerCase()
-  );
+async function readComposerContent(
+  composerEditor
+) {
+  const tagName =
+    await composerEditor.evaluate(
+      (element) =>
+        element.tagName.toLowerCase()
+    );
 
   if (
     tagName === 'textarea' ||
@@ -45,18 +54,6 @@ async function insertComposerContent(
   content
 ) {
   await composerEditor.click();
-
-  const tagName = await composerEditor.evaluate(
-    (element) => element.tagName.toLowerCase()
-  );
-
-  if (
-    tagName === 'textarea' ||
-    tagName === 'input'
-  ) {
-    await composerEditor.fill(content);
-    return;
-  }
 
   await composerEditor.fill(content);
 }
@@ -93,7 +90,9 @@ async function uploadComposerImage(
 
   let fileInput = null;
 
-  for (const candidate of fileInputCandidates) {
+  for (
+    const candidate of fileInputCandidates
+  ) {
     const count = await candidate.count();
 
     if (count > 0) {
@@ -119,25 +118,41 @@ async function uploadComposerImage(
     'Image file selected. Waiting for Facebook preview...'
   );
 
-  const uploadDeadline = Date.now() + 120_000;
+  const uploadDeadline =
+    Date.now() + 120_000;
 
   while (Date.now() < uploadDeadline) {
     const previewCandidates = [
-      composerDialog.locator('img[src^="blob:"]'),
-      composerDialog.locator('img[src*="fbcdn.net"]'),
+      composerDialog.locator(
+        'img[src^="blob:"]'
+      ),
+
+      composerDialog.locator(
+        'img[src*="fbcdn.net"]'
+      ),
+
       composerDialog.locator(
         '[role="img"][style*="background-image"]'
       )
     ];
 
-    for (const candidate of previewCandidates) {
+    for (
+      const candidate of previewCandidates
+    ) {
       const count = await candidate.count();
 
-      for (let index = 0; index < count; index += 1) {
-        const preview = candidate.nth(index);
+      for (
+        let index = 0;
+        index < count;
+        index += 1
+      ) {
+        const preview =
+          candidate.nth(index);
 
         if (
-          await preview.isVisible().catch(() => false)
+          await preview
+            .isVisible()
+            .catch(() => false)
         ) {
           console.log(
             'Image preview detected successfully.'
@@ -161,12 +176,8 @@ async function uploadComposerImage(
   );
 }
 
-export async function prepareGroupPost(
-  stt,
-  groupNumber = 1
-) {
+function validateStt(stt) {
   const numericStt = Number(stt);
-  const numericGroupNumber = Number(groupNumber);
 
   if (
     !Number.isInteger(numericStt) ||
@@ -177,63 +188,167 @@ export async function prepareGroupPost(
     );
   }
 
+  return numericStt;
+}
+
+function resolveNumericGroupNumber(
+  groupNumber,
+  totalGroups
+) {
+  const numericGroupNumber =
+    Number(groupNumber);
+
   if (
     !Number.isInteger(numericGroupNumber) ||
     numericGroupNumber <= 0
   ) {
     throw new Error(
-      'Group number must be a positive integer.'
+      [
+        'Group number must be a positive integer or "next".',
+        '',
+        'Examples:',
+        'node src/prepare-post.js 1 1',
+        'node src/prepare-post.js 1 next'
+      ].join('\n')
     );
   }
+
+  if (numericGroupNumber > totalGroups) {
+    throw new Error(
+      [
+        `Invalid group number: ${numericGroupNumber}.`,
+        `This post has only ${totalGroups} enabled groups.`,
+        '',
+        `Valid range: 1-${totalGroups}`
+      ].join('\n')
+    );
+  }
+
+  return numericGroupNumber;
+}
+
+async function resolveTargetGroup(
+  stt,
+  groupSelection,
+  groups
+) {
+  if (
+    String(groupSelection)
+      .trim()
+      .toLowerCase() !== 'next'
+  ) {
+    const groupNumber =
+      resolveNumericGroupNumber(
+        groupSelection,
+        groups.length
+      );
+
+    return {
+      groupNumber,
+      targetGroup:
+        groups[groupNumber - 1],
+      selectionMode: 'manual'
+    };
+  }
+
+  const progress =
+    await getPostProgress(stt);
+
+  const preparedGroupKeys =
+    new Set(progress.preparedGroupKeys);
+
+  const nextGroupIndex =
+    groups.findIndex(
+      (group) =>
+        !preparedGroupKeys.has(
+          group.groupKey
+        )
+    );
+
+  if (nextGroupIndex === -1) {
+    throw new Error(
+      [
+        `All ${groups.length} assigned groups have already been prepared for STT ${stt}.`,
+        '',
+        'Reset progress before starting again:',
+        `node src/post-progress.js reset ${stt}`
+      ].join('\n')
+    );
+  }
+
+  return {
+    groupNumber:
+      nextGroupIndex + 1,
+
+    targetGroup:
+      groups[nextGroupIndex],
+
+    selectionMode: 'next'
+  };
+}
+
+export async function prepareGroupPost(
+  stt,
+  groupSelection = 'next'
+) {
+  const numericStt =
+    validateStt(stt);
 
   console.log(
     `Loading post data for STT ${numericStt}...`
   );
 
   const preparedPost =
-    await getPreparedPostData(numericStt);
+    await getPreparedPostData(
+      numericStt
+    );
 
   console.log(
     'Loading assigned Facebook Groups...'
   );
 
   const groupResult =
-    await getPostGroupsByStt(numericStt);
+    await getPostGroupsByStt(
+      numericStt
+    );
 
-  if (groupResult.groups.length === 0) {
+  if (
+    groupResult.groups.length === 0
+  ) {
     throw new Error(
       `Post STT ${numericStt} has no enabled groups.`
     );
   }
 
-  if (
-    numericGroupNumber >
-    groupResult.groups.length
-  ) {
-    throw new Error(
-      [
-        `Invalid group number: ${numericGroupNumber}.`,
-        `Post STT ${numericStt} has only ${groupResult.groups.length} enabled groups.`,
-        '',
-        `Valid range: 1-${groupResult.groups.length}`
-      ].join('\n')
-    );
-  }
-
-  const targetGroup =
-    groupResult.groups[numericGroupNumber - 1];
+  const {
+    groupNumber,
+    targetGroup,
+    selectionMode
+  } = await resolveTargetGroup(
+    numericStt,
+    groupSelection,
+    groupResult.groups
+  );
 
   console.log('');
   console.log(
-    `Preparing group ${numericGroupNumber} of ${groupResult.groups.length}:`
+    `Preparing group ${groupNumber} of ${groupResult.groups.length}:`
   );
+
   console.log(
     `${targetGroup.groupKey} — ${targetGroup.name}`
   );
+
   console.log(`URL: ${targetGroup.url}`);
 
+  console.log(
+    `Selection mode: ${selectionMode}`
+  );
+
   const composerSession =
-    await openFacebookComposer(targetGroup);
+    await openFacebookComposer(
+      targetGroup
+    );
 
   const {
     page,
@@ -242,7 +357,9 @@ export async function prepareGroupPost(
   } = composerSession;
 
   console.log('');
-  console.log('Inserting JD content...');
+  console.log(
+    'Inserting JD content...'
+  );
 
   await insertComposerContent(
     composerEditor,
@@ -252,15 +369,23 @@ export async function prepareGroupPost(
   await page.waitForTimeout(1500);
 
   const insertedContent =
-    await readComposerContent(composerEditor);
+    await readComposerContent(
+      composerEditor
+    );
 
   const expectedContent =
-    normaliseContent(preparedPost.jd);
+    normaliseContent(
+      preparedPost.jd
+    );
 
   const actualContent =
-    normaliseContent(insertedContent);
+    normaliseContent(
+      insertedContent
+    );
 
-  if (actualContent !== expectedContent) {
+  if (
+    actualContent !== expectedContent
+  ) {
     throw new Error(
       [
         'JD content was inserted, but verification failed.',
@@ -286,30 +411,61 @@ export async function prepareGroupPost(
     preparedPost.image.absolutePath
   );
 
+  const updatedProgress =
+    await markGroupPrepared({
+      stt: numericStt,
+      groupNumber,
+      groupKey:
+        targetGroup.groupKey
+    });
+
   console.log('');
-  console.log('Post preparation test passed.');
-  console.log(`STT: ${preparedPost.stt}`);
+  console.log(
+    'Progress updated successfully.'
+  );
+
+  console.log(
+    `Prepared groups: ${updatedProgress.preparedGroupKeys.length}/${groupResult.groups.length}`
+  );
+
+  console.log('');
+  console.log(
+    'Post preparation test passed.'
+  );
+
+  console.log(
+    `STT: ${preparedPost.stt}`
+  );
+
   console.log(
     `Position: ${preparedPost.position.name}`
   );
+
   console.log(
     `Group: ${targetGroup.groupKey}`
   );
+
   console.log(
     `Image: ${preparedPost.image.relativePath}`
   );
 
   console.log('');
-  console.log('JD content has been inserted.');
+  console.log(
+    'JD content has been inserted.'
+  );
+
   console.log(
     'Image has been uploaded successfully.'
   );
+
   console.log(
-    `Prepared group ${numericGroupNumber} of ${groupResult.groups.length}.`
+    `Prepared group ${groupNumber} of ${groupResult.groups.length}.`
   );
+
   console.log(
     'The Post button was not clicked.'
   );
+
   console.log(
     'Chrome will remain open for manual inspection.'
   );
@@ -318,28 +474,31 @@ export async function prepareGroupPost(
     ...composerSession,
     preparedPost,
     targetGroup,
-    groupNumber: numericGroupNumber,
-    totalGroups: groupResult.groups.length
+    groupNumber,
+    totalGroups:
+      groupResult.groups.length,
+    progress: updatedProgress
   };
 }
 
 async function run() {
   const stt = process.argv[2];
 
-  const groupNumber =
-    process.argv[3] || '1';
+  const groupSelection =
+    process.argv[3] || 'next';
 
   if (!stt) {
     console.error(
       [
         'Usage:',
-        'node src/prepare-post.js <stt> <group-number>',
+        'node src/prepare-post.js <stt> [group-number|next]',
         '',
         'Examples:',
+        'node src/prepare-post.js 1 next',
         'node src/prepare-post.js 1 1',
         'node src/prepare-post.js 1 2',
         '',
-        'group-number defaults to 1 when omitted.'
+        'The default selection is "next".'
       ].join('\n')
     );
 
@@ -350,10 +509,12 @@ async function run() {
   let lockHandle = null;
 
   try {
-    lockHandle = await acquireJobLock({
-      stt: Number(stt),
-      groupNumber: Number(groupNumber)
-    });
+    lockHandle =
+      await acquireJobLock({
+        stt: Number(stt),
+        groupNumber:
+          groupSelection
+      });
 
     console.log(
       'Facebook job lock acquired.'
@@ -361,20 +522,23 @@ async function run() {
 
     await prepareGroupPost(
       stt,
-      groupNumber
+      groupSelection
     );
   } catch (error) {
     console.error('');
     console.error(
       'Post preparation test failed.'
     );
+
     console.error(error.message);
 
     process.exitCode = 1;
   } finally {
     if (lockHandle) {
       try {
-        await releaseJobLock(lockHandle);
+        await releaseJobLock(
+          lockHandle
+        );
 
         console.log(
           'Facebook job lock released.'
@@ -383,20 +547,13 @@ async function run() {
         console.error(
           'Could not release Facebook job lock.'
         );
+
         console.error(error.message);
       }
     }
   }
 }
 
-/*
- * Run CLI only when this file is executed directly:
- *
- * node src/prepare-post.js 1 1
- *
- * This comparison is more reliable than comparing raw filesystem paths
- * with import.meta.url.
- */
 const isDirectExecution =
   process.argv[1] &&
   import.meta.url ===
