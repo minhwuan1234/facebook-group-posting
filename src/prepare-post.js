@@ -56,6 +56,94 @@ async function insertComposerContent(
   await composerEditor.fill(content);
 }
 
+async function uploadComposerImage(
+  page,
+  composerDialog,
+  imagePath
+) {
+  console.log('Uploading image...');
+
+  const fileInputs = [
+    composerDialog.locator('input[type="file"]'),
+    page.locator(
+      '[role="dialog"] input[type="file"]'
+    ),
+    page.locator(
+      'input[type="file"][accept*="image"]'
+    )
+  ];
+
+  let fileInput = null;
+
+  for (const candidate of fileInputs) {
+    const count = await candidate.count();
+
+    if (count > 0) {
+      fileInput = candidate.first();
+      break;
+    }
+  }
+
+  if (!fileInput) {
+    throw new Error(
+      [
+        'Could not find the image upload input.',
+        'Inspect the open composer manually.',
+        'The Post button has not been clicked.'
+      ].join('\n')
+    );
+  }
+
+  await fileInput.setInputFiles(imagePath);
+
+  console.log(
+    'Image file selected. Waiting for Facebook preview...'
+  );
+
+  const previewCandidates = [
+    composerDialog.locator('img[src^="blob:"]'),
+    composerDialog.locator(
+      'img[src*="fbcdn.net"]'
+    ),
+    composerDialog.locator(
+      '[role="img"]'
+    )
+  ];
+
+  const uploadDeadline = Date.now() + 120_000;
+
+  while (Date.now() < uploadDeadline) {
+    for (const preview of previewCandidates) {
+      const count = await preview.count();
+
+      for (let index = 0; index < count; index += 1) {
+        const item = preview.nth(index);
+
+        if (
+          await item.isVisible().catch(() => false)
+        ) {
+          console.log(
+            'Image preview detected successfully.'
+          );
+
+          return;
+        }
+      }
+    }
+
+    await page.waitForTimeout(1000);
+  }
+
+  throw new Error(
+    [
+      'The image was selected, but Facebook preview could not be verified.',
+      '',
+      'Inspect the open composer manually.',
+      'The Post button has not been clicked.'
+    ].join('\n')
+  );
+}
+
 export async function prepareFirstGroupPost(
   stt
 ) {
@@ -105,9 +193,10 @@ export async function prepareFirstGroupPost(
     await openFacebookComposer(targetGroup);
 
   const {
-    page,
-    composerEditor
-  } = composerSession;
+  page,
+  composerDialog,
+  composerEditor
+} = composerSession;
 
   console.log('');
   console.log('Inserting JD content...');
@@ -141,6 +230,14 @@ export async function prepareFirstGroupPost(
       ].join('\n')
     );
   }
+  console.log('');
+console.log('JD content verified successfully.');
+
+await uploadComposerImage(
+  page,
+  composerDialog,
+  preparedPost.image.absolutePath
+);
 
   console.log('');
   console.log('Post preparation test passed.');
@@ -157,7 +254,7 @@ export async function prepareFirstGroupPost(
 
   console.log('');
   console.log('JD content has been inserted.');
-  console.log('Image has not been uploaded yet.');
+  console.log('Image has been uploaded successfully.');
   console.log('Only the first group was processed.');
   console.log('The Post button was not clicked.');
   console.log(
