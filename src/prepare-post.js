@@ -292,12 +292,20 @@ async function publishFacebookPost(
   composerDialog
 ) {
   console.log('');
-  console.log('Searching for the Facebook Post button...');
+  console.log(
+    'Searching for the Facebook Post button...'
+  );
 
   const postButtonCandidates = [
     composerDialog.getByRole('button', {
       name: /^(đăng|post)$/i
     }),
+
+    composerDialog
+      .locator('[role="button"]')
+      .filter({
+        hasText: /^(đăng|post)$/i
+      }),
 
     composerDialog.locator(
       '[role="button"][aria-label="Đăng"]'
@@ -312,75 +320,132 @@ async function publishFacebookPost(
     })
   ];
 
+  const deadline = Date.now() + 30_000;
+
   let postButton = null;
 
-  for (const candidate of postButtonCandidates) {
-    const count = await candidate.count();
+  while (
+    Date.now() < deadline &&
+    !postButton
+  ) {
+    for (
+      const candidate of postButtonCandidates
+    ) {
+      const count =
+        await candidate.count();
 
-    for (let index = 0; index < count; index += 1) {
-      const button = candidate.nth(index);
+      for (
+        let index = 0;
+        index < count;
+        index += 1
+      ) {
+        const button =
+          candidate.nth(index);
 
-      const isVisible = await button
-        .isVisible()
-        .catch(() => false);
+        const isVisible =
+          await button
+            .isVisible()
+            .catch(() => false);
 
-      if (!isVisible) {
-        continue;
+        if (!isVisible) {
+          continue;
+        }
+
+        const state =
+          await button.evaluate(
+            (element) => {
+              const ariaDisabled =
+                element.getAttribute(
+                  'aria-disabled'
+                );
+
+              const nativeDisabled =
+                'disabled' in element
+                  ? element.disabled
+                  : false;
+
+              const rect =
+                element.getBoundingClientRect();
+
+              return {
+                ariaDisabled,
+                nativeDisabled,
+                width: rect.width,
+                height: rect.height,
+                text:
+                  element.textContent?.trim()
+              };
+            }
+          );
+
+        const hasUsableSize =
+          state.width > 0 &&
+          state.height > 0;
+
+        const isEnabled =
+          state.ariaDisabled !== 'true' &&
+          state.nativeDisabled !== true;
+
+        if (
+          hasUsableSize &&
+          isEnabled
+        ) {
+          postButton = button;
+          break;
+        }
       }
 
-      postButton = button;
-      break;
+      if (postButton) {
+        break;
+      }
     }
 
-    if (postButton) {
-      break;
+    if (!postButton) {
+      console.log(
+        'Post button is not ready yet. Waiting...'
+      );
+
+      await page.waitForTimeout(1000);
     }
   }
 
   if (!postButton) {
     throw new Error(
       [
-        'Could not find the Facebook Post button.',
+        'Could not find an enabled Facebook Post button.',
         '',
+        'The composer is still open.',
         'The post was not published.',
-        'Inspect the open composer manually.'
+        '',
+        'Inspect the Facebook window manually.'
       ].join('\n')
     );
   }
 
-  const isDisabled = await postButton
-    .isDisabled()
-    .catch(() => false);
+  console.log(
+    'Enabled Post button found.'
+  );
 
-  if (isDisabled) {
-    throw new Error(
-      [
-        'The Facebook Post button is currently disabled.',
-        '',
-        'Possible causes:',
-        '1. The image is still uploading.',
-        '2. Facebook requires another field.',
-        '3. The group requires a topic or post type.',
-        '4. Facebook has shown a warning.',
-        '',
-        'The post was not published.'
-      ].join('\n')
-    );
-  }
+  await postButton.scrollIntoViewIfNeeded();
 
-  console.log('Post button found.');
-  console.log('Publishing Facebook post...');
+  console.log(
+    'Publishing Facebook post...'
+  );
 
   await postButton.click({
     timeout: 15_000
   });
 
-  const publishDeadline = Date.now() + 90_000;
+  const publishDeadline =
+    Date.now() + 90_000;
 
-  while (Date.now() < publishDeadline) {
-    const dialogVisible = await composerDialog
-      .isVisible()
-      .catch(() => false);
+  while (
+    Date.now() < publishDeadline
+  ) {
+    const dialogVisible =
+      await composerDialog
+        .isVisible()
+        .catch(() => false);
 
     if (!dialogVisible) {
       console.log(
@@ -392,9 +457,10 @@ async function publishFacebookPost(
       };
     }
 
-    const pendingApproval = page.getByText(
-      /pending approval|awaiting approval|chờ phê duyệt|đang chờ duyệt|quản trị viên phê duyệt/i
-    );
+    const pendingApproval =
+      page.getByText(
+        /pending approval|awaiting approval|chờ phê duyệt|đang chờ duyệt|quản trị viên phê duyệt/i
+      );
 
     if (
       await pendingApproval
@@ -411,9 +477,10 @@ async function publishFacebookPost(
       };
     }
 
-    const errorMessage = page.getByText(
-      /couldn't post|unable to post|something went wrong|không thể đăng|đã xảy ra lỗi|thử lại/i
-    );
+    const errorMessage =
+      page.getByText(
+        /couldn't post|unable to post|something went wrong|không thể đăng|đã xảy ra lỗi|thử lại/i
+      );
 
     if (
       await errorMessage
@@ -425,7 +492,7 @@ async function publishFacebookPost(
         [
           'Facebook displayed an error after clicking Post.',
           '',
-          'The post could not be confirmed as submitted.'
+          'Progress has not been updated.'
         ].join('\n')
       );
     }
