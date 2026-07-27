@@ -1,112 +1,134 @@
 import { chromium } from 'playwright-core';
+import { fileURLToPath } from 'node:url';
+import os from 'node:os';
+import path from 'node:path';
 
-const DEFAULT_CDP_URL = 'http://127.0.0.1:9223';
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+const DEFAULT_PROFILE_DIR = path.join(
+  os.homedir(),
+  '.hermes',
+  'browser-profiles',
+  'facebook'
+);
+
 /**
- * Connect to the dedicated Facebook Chrome instance.
+ * Launch a dedicated persistent Google Chrome profile.
  *
- * This function does not launch Chrome.
- * Chrome must already be running with remote debugging enabled.
+ * This browser is isolated from:
+ * - the user's normal Chrome profile;
+ * - other local automation flows;
+ * - other Playwright jobs.
+ *
+ * The persistent profile keeps Facebook cookies and login state.
  */
-export async function connectToFacebookBrowser(options = {}) {
-  const cdpUrl =
-    options.cdpUrl ||
-    process.env.FACEBOOK_CDP_URL ||
-    DEFAULT_CDP_URL;
+export async function launchFacebookBrowser(options = {}) {
+  const profileDir =
+    options.profileDir ||
+    process.env.FACEBOOK_CHROME_PROFILE ||
+    DEFAULT_PROFILE_DIR;
 
   const timeout =
     Number(options.timeout) ||
     Number(process.env.DEFAULT_TIMEOUT_MS) ||
     DEFAULT_TIMEOUT_MS;
 
-  let browser;
+  let context;
 
   try {
-    browser = await chromium.connectOverCDP(cdpUrl, {
-      timeout
+    context = await chromium.launchPersistentContext(profileDir, {
+      channel: 'chrome',
+      headless: false,
+      timeout,
+      viewport: null,
+      acceptDownloads: true,
+      args: [
+        '--start-maximized',
+        '--disable-session-crashed-bubble'
+      ]
     });
   } catch (error) {
     throw new Error(
       [
-        `Could not connect to Facebook Chrome at ${cdpUrl}.`,
-        'Confirm that the dedicated Chrome instance is running on port 9223.',
+        'Could not launch the dedicated Facebook Chrome profile.',
+        `Profile directory: ${profileDir}`,
+        '',
+        'Possible causes:',
+        '1. The Facebook Chrome profile is already open.',
+        '2. Google Chrome is not installed.',
+        '3. Another process is using the same profile directory.',
+        '',
         `Original error: ${error.message}`
       ].join('\n')
     );
   }
 
-  const contexts = browser.contexts();
-
-  if (contexts.length === 0) {
-    await browser.close();
-
-    throw new Error(
-      'Chrome connected successfully, but no browser context was found.'
-    );
-  }
-
-  const context = contexts[0];
+  context.setDefaultTimeout(timeout);
+  context.setDefaultNavigationTimeout(timeout);
 
   return {
-    browser,
     context,
-    cdpUrl
+    profileDir
   };
 }
 
 /**
- * Create a new page owned by this automation job.
+ * Return a clean automation page.
  *
- * Existing tabs are not reused.
+ * Persistent Chrome sometimes creates an initial blank tab.
+ * That tab may be reused only when it is still blank.
  */
-export async function createAutomationPage(context, options = {}) {
+export async function getAutomationPage(context) {
   if (!context) {
     throw new Error('A valid browser context is required.');
   }
 
-  const timeout =
-    Number(options.timeout) ||
-    Number(process.env.DEFAULT_TIMEOUT_MS) ||
-    DEFAULT_TIMEOUT_MS;
+  const existingPages = context.pages();
 
-  const page = await context.newPage();
-  page.setDefaultTimeout(timeout);
-  page.setDefaultNavigationTimeout(timeout);
+  const blankPage = existingPages.find((page) => {
+    const url = page.url();
 
-  return page;
+    return url === 'about:blank' || url === 'chrome://newtab/';
+  });
+
+  if (blankPage) {
+    return blankPage;
+  }
+
+  return context.newPage();
 }
 
 /**
- * Disconnect Playwright without closing the external Chrome process.
+ * Close only one automation page.
+ *
+ * This function does not close the entire browser context.
  */
-export async function disconnectFromBrowser(browser) {
-  if (!browser) {
+export async function closeAutomationPage(page) {
+  if (!page || page.isClosed()) {
     return;
   }
 
-  await browser.close();
+  await page.close();
 }
 
 /**
- * Temporary connection test.
+ * Temporary browser launch test.
  *
  * Run:
  * node src/browser.js
  */
-async function runConnectionTest() {
-  let browser;
-  let page;
+async function runBrowserTest() {
+  let context;
 
   try {
-    console.log('Connecting to Facebook Chrome Worker...');
+    console.log('Launching dedicated Facebook Chrome profile...');
 
-    const connection = await connectToFacebookBrowser();
-    browser = connection.browser;
+    const browserSession = await launchFacebookBrowser();
+    context = browserSession.context;
 
-    console.log(`Connected successfully: ${connection.cdpUrl}`);
+    console.log(`Profile: ${browserSession.profileDir}`);
 
-    page = await createAutomationPage(connection.context);
+    const page = await getAutomationPage(context);
 
     console.log('Opening test page...');
 
@@ -117,26 +139,33 @@ async function runConnectionTest() {
     console.log(`Page opened: ${await page.title()}`);
     console.log(`URL: ${page.url()}`);
     console.log('');
-    console.log('Browser connection test passed.');
-    console.log('The test tab will remain open.');
+    console.log('Browser launch test passed.');
+    console.log('Chrome will remain open for manual inspection.');
+    console.log('');
+    console.log(
+      'Close the Chrome window manually when you finish testing.'
+    );
 
-    page = null;
+    // Do not close the persistent context here.
+    // Phase 1 requires the browser to remain visible for manual review.
   } catch (error) {
     console.error('');
-    console.error('Browser connection test failed.');
+    console.error('Browser launch test failed.');
     console.error(error.message);
-    process.exitCode = 1;
-  } finally {
-    if (browser) {
-      await disconnectFromBrowser(browser);
+
+    if (context) {
+      await context.close().catch(() => {});
     }
+
+    process.exitCode = 1;
   }
 }
 
-const isDirectExecution =
-  process.argv[1] &&
-  new URL(import.meta.url).pathname === process.argv[1];
+const currentFilePath = fileURLToPath(import.meta.url);
+const executedFilePath = process.argv[1]
+  ? path.resolve(process.argv[1])
+  : null;
 
-if (isDirectExecution) {
-  await runConnectionTest();
+if (executedFilePath === currentFilePath) {
+  await runBrowserTest();
 }
