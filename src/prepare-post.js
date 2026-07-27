@@ -1,3 +1,5 @@
+import readline from 'node:readline/promises';
+import { stdin, stdout } from 'node:process';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -287,6 +289,48 @@ async function resolveTargetGroup(
   };
 }
 
+async function waitForManualPublishConfirmation() {
+  const terminal = readline.createInterface({
+    input: stdin,
+    output: stdout
+  });
+
+  try {
+    console.log('');
+    console.log(
+      'Review the Facebook post and publish it manually.'
+    );
+    console.log(
+      'After the post is published, return here and press Enter.'
+    );
+
+    await terminal.question('');
+  } finally {
+    terminal.close();
+  }
+}
+
+async function waitForManualPublishConfirmation() {
+  const terminal = readline.createInterface({
+    input: stdin,
+    output: stdout
+  });
+
+  try {
+    console.log('');
+    console.log(
+      'Review the Facebook post and publish it manually.'
+    );
+    console.log(
+      'After publishing, return to Terminal and press Enter.'
+    );
+
+    await terminal.question('');
+  } finally {
+    terminal.close();
+  }
+}
+
 export async function prepareGroupPost(
   stt,
   groupSelection = 'next'
@@ -411,14 +455,24 @@ export async function prepareGroupPost(
     preparedPost.image.absolutePath
   );
 
-  const updatedProgress =
-    await markGroupPrepared({
-      stt: numericStt,
-      groupNumber,
-      groupKey:
-        targetGroup.groupKey
-    });
+await waitForManualPublishConfirmation();
 
+const updatedProgress =
+  await markGroupPrepared({
+    stt: numericStt,
+    groupNumber,
+    groupKey: targetGroup.groupKey
+  });
+
+console.log('');
+console.log(
+  'Manual publish confirmed.'
+);
+
+console.log(
+  `Prepared groups: ${updatedProgress.preparedGroupKeys.length}/${groupResult.groups.length}`
+);
+  
   console.log('');
   console.log(
     'Progress updated successfully.'
@@ -466,9 +520,12 @@ export async function prepareGroupPost(
     'The Post button was not clicked.'
   );
 
-  console.log(
-    'Chrome will remain open for manual inspection.'
-  );
+
+  await composerSession.context.close();
+
+console.log(
+  'Facebook Chrome closed.'
+);
 
   return {
     ...composerSession,
