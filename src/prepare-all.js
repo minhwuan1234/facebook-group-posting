@@ -153,6 +153,18 @@ export async function prepareAllAssignedGroups(stt) {
     console.log(
       `Batch progress: ${index + 1}/${remainingGroups.length}`
     );
+
+    if (index < remainingGroups.length - 1) {
+  console.log('');
+  console.log(
+    'Waiting 10 seconds before the next group...'
+  );
+
+  await new Promise(
+    (resolve) =>
+      setTimeout(resolve, 10_000)
+  );
+}
   }
 
   const finalProgress =
