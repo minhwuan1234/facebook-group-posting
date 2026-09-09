@@ -13,14 +13,29 @@ import {
 const DEFAULT_TIMEOUT_MS = 30_000;
 const COMPOSER_TIMEOUT_MS = 15_000;
 
+
+/* =========================================================
+ * LOCATOR HELPERS
+ * ========================================================= */
+
 async function firstVisibleLocator(candidates) {
   for (const locator of candidates) {
     const count = await locator.count();
 
-    for (let index = 0; index < count; index += 1) {
-      const item = locator.nth(index);
+    for (
+      let index = 0;
+      index < count;
+      index += 1
+    ) {
+      const item =
+        locator.nth(index);
 
-      if (await item.isVisible().catch(() => false)) {
+      const visible =
+        await item
+          .isVisible()
+          .catch(() => false);
+
+      if (visible) {
         return item;
       }
     }
@@ -29,8 +44,16 @@ async function firstVisibleLocator(candidates) {
   return null;
 }
 
+
+/* =========================================================
+ * GROUP VALIDATION
+ * ========================================================= */
+
 function validateFacebookGroup(group) {
-  if (!group || typeof group !== 'object') {
+  if (
+    !group ||
+    typeof group !== 'object'
+  ) {
     throw new Error(
       'A valid Facebook Group object is required.'
     );
@@ -71,7 +94,10 @@ function validateFacebookGroup(group) {
   let parsedUrl;
 
   try {
-    parsedUrl = new URL(group.url);
+    parsedUrl =
+      new URL(
+        group.url
+      );
   } catch {
     throw new Error(
       `Facebook Group "${groupKey}" has an invalid URL.`
@@ -79,75 +105,160 @@ function validateFacebookGroup(group) {
   }
 
   const isFacebookHost =
-    parsedUrl.hostname === 'facebook.com' ||
-    parsedUrl.hostname === 'www.facebook.com';
+    parsedUrl.hostname ===
+      'facebook.com' ||
+    parsedUrl.hostname ===
+      'www.facebook.com';
 
   if (
     !isFacebookHost ||
-    !parsedUrl.pathname.startsWith('/groups/')
+    !parsedUrl.pathname
+      .startsWith('/groups/')
   ) {
     throw new Error(
       `Facebook Group "${groupKey}" does not have a valid Facebook Group URL.`
     );
   }
 
-  if (group.enabled === false) {
+  if (
+    group.enabled === false
+  ) {
     throw new Error(
       `Facebook Group "${groupKey}" is disabled.`
     );
   }
 
   return {
-    id: groupKey.trim(),
-    groupKey: groupKey.trim(),
-    name: group.name.trim(),
-    url: group.url.trim(),
-    enabled: true
+    id:
+      groupKey.trim(),
+
+    groupKey:
+      groupKey.trim(),
+
+    name:
+      group.name.trim(),
+
+    url:
+      group.url.trim(),
+
+    enabled:
+      true
   };
 }
 
-async function resolveGroup(groupInput) {
+
+async function resolveGroup(
+  groupInput
+) {
   if (
     typeof groupInput === 'string' &&
     groupInput.trim() !== ''
   ) {
-    const localGroup = await getGroupById(
-      groupInput.trim()
-    );
+    const localGroup =
+      await getGroupById(
+        groupInput.trim()
+      );
 
     return validateFacebookGroup({
-      groupKey: localGroup.id,
-      name: localGroup.name,
-      url: localGroup.url,
-      enabled: localGroup.enabled
+      groupKey:
+        localGroup.id,
+
+      name:
+        localGroup.name,
+
+      url:
+        localGroup.url,
+
+      enabled:
+        localGroup.enabled
     });
   }
 
-  return validateFacebookGroup(groupInput);
+  return validateFacebookGroup(
+    groupInput
+  );
 }
 
-async function findComposerTrigger(page) {
+
+/* =========================================================
+ * FACEBOOK STATE
+ * ========================================================= */
+
+function detectBlockedFacebookState(
+  page
+) {
+  const currentUrl =
+    page
+      .url()
+      .toLowerCase();
+
+  if (
+    currentUrl.includes('/login') ||
+    currentUrl.includes(
+      'login.php'
+    )
+  ) {
+    return (
+      'Facebook login is required before the composer can be opened.'
+    );
+  }
+
+  if (
+    currentUrl.includes(
+      '/checkpoint'
+    ) ||
+    currentUrl.includes(
+      '/two_step_verification'
+    ) ||
+    currentUrl.includes(
+      '/recover'
+    )
+  ) {
+    return (
+      'Facebook requires manual account verification.'
+    );
+  }
+
+  return null;
+}
+
+
+/* =========================================================
+ * COMPOSER TRIGGER
+ * ========================================================= */
+
+async function findComposerTrigger(
+  page
+) {
   const textPattern =
     /bạn viết gì đi|viết gì đó|tạo bài viết|bạn đang nghĩ gì|write something|create post|what's on your mind/i;
 
   const candidates = [
-    // Giao diện Facebook tiếng Việt hiện tại:
-    // vùng "Bạn viết gì đi..." thường nằm trong một role="button".
     page
-      .locator('[role="button"]')
+      .locator(
+        '[role="button"]'
+      )
       .filter({
-        hasText: /bạn viết gì đi/i
+        hasText:
+          /bạn viết gì đi/i
       }),
 
     page
-      .locator('[role="button"]')
+      .locator(
+        '[role="button"]'
+      )
       .filter({
-        hasText: /viết gì đó|tạo bài viết|bạn đang nghĩ gì/i
+        hasText:
+          /viết gì đó|tạo bài viết|bạn đang nghĩ gì/i
       }),
 
-    page.getByRole('button', {
-      name: textPattern
-    }),
+    page.getByRole(
+      'button',
+      {
+        name:
+          textPattern
+      }
+    ),
 
     page.locator(
       '[role="button"][aria-label*="Bạn viết gì đi" i]'
@@ -169,14 +280,27 @@ async function findComposerTrigger(page) {
       '[role="button"][aria-label*="Tạo bài viết" i]'
     ),
 
-    page.getByText(textPattern, {
-      exact: false
-    })
+    page.getByText(
+      textPattern,
+      {
+        exact: false
+      }
+    )
   ];
 
-  return firstVisibleLocator(candidates);
+  return firstVisibleLocator(
+    candidates
+  );
 }
-async function findComposerDialog(page) {
+
+
+/* =========================================================
+ * COMPOSER DIALOG
+ * ========================================================= */
+
+async function findComposerDialog(
+  page
+) {
   const candidates = [
     page.locator(
       '[role="dialog"]:has([contenteditable="true"])'
@@ -186,69 +310,297 @@ async function findComposerDialog(page) {
       '[role="dialog"]:has(textarea)'
     ),
 
-    page.getByRole('dialog')
-  ];
-
-  return firstVisibleLocator(candidates);
-}
-
-async function findComposerEditor(page) {
-  const candidates = [
-    page.locator(
-      '[role="dialog"] [contenteditable="true"][role="textbox"]'
-    ),
-
-    page.locator(
-      '[role="dialog"] [contenteditable="true"]'
-    ),
-
-    page.locator(
-      '[role="dialog"] textarea'
-    ),
-
-    page.locator(
-      '[contenteditable="true"][role="textbox"]'
+    page.getByRole(
+      'dialog'
     )
   ];
 
-  return firstVisibleLocator(candidates);
+  return firstVisibleLocator(
+    candidates
+  );
 }
 
-function detectBlockedFacebookState(page) {
-  const currentUrl = page.url().toLowerCase();
 
-  if (
-    currentUrl.includes('/login') ||
-    currentUrl.includes('login.php')
-  ) {
-    return 'Facebook login is required before the composer can be opened.';
+/* =========================================================
+ * COMPOSER EDITOR
+ * ========================================================= */
+
+async function findComposerEditor(
+  page,
+  composerDialog
+) {
+  if (!composerDialog) {
+    return null;
   }
 
-  if (
-    currentUrl.includes('/checkpoint') ||
-    currentUrl.includes('/two_step_verification') ||
-    currentUrl.includes('/recover')
+  const candidates = [
+    composerDialog.locator(
+      '[contenteditable="true"][role="textbox"]'
+    ),
+
+    composerDialog.locator(
+      '[role="textbox"][contenteditable="true"]'
+    ),
+
+    composerDialog.locator(
+      'div[contenteditable="true"]'
+    ),
+
+    composerDialog.locator(
+      '[contenteditable="true"]'
+    ),
+
+    composerDialog.locator(
+      'textarea'
+    )
+  ];
+
+  for (
+    const candidate
+    of candidates
   ) {
-    return 'Facebook requires manual account verification.';
+    const count =
+      await candidate.count();
+
+    for (
+      let index = 0;
+      index < count;
+      index += 1
+    ) {
+      const item =
+        candidate.nth(index);
+
+      const visible =
+        await item
+          .isVisible()
+          .catch(() => false);
+
+      if (!visible) {
+        continue;
+      }
+
+      const info =
+        await item.evaluate(
+          (element) => {
+            const rect =
+              element
+                .getBoundingClientRect();
+
+            return {
+              tag:
+                element.tagName,
+
+              role:
+                element.getAttribute(
+                  'role'
+                ),
+
+              contenteditable:
+                element.getAttribute(
+                  'contenteditable'
+                ),
+
+              ariaLabel:
+                element.getAttribute(
+                  'aria-label'
+                ),
+
+              ariaPlaceholder:
+                element.getAttribute(
+                  'aria-placeholder'
+                ),
+
+              text:
+                element.innerText ||
+                element.textContent ||
+                '',
+
+              width:
+                rect.width,
+
+              height:
+                rect.height
+            };
+          }
+        );
+
+      console.log(
+        'Composer editor candidate:',
+        info
+      );
+
+      if (
+        info.width <= 0 ||
+        info.height <= 0
+      ) {
+        continue;
+      }
+
+      return item;
+    }
+  }
+
+  /*
+   * Fallback cuối:
+   * tìm contenteditable visible trong dialog.
+   */
+  const fallbackCandidates =
+    page.locator(
+      '[role="dialog"] [contenteditable="true"]'
+    );
+
+  const fallbackCount =
+    await fallbackCandidates.count();
+
+  for (
+    let index = 0;
+    index < fallbackCount;
+    index += 1
+  ) {
+    const item =
+      fallbackCandidates.nth(
+        index
+      );
+
+    const visible =
+      await item
+        .isVisible()
+        .catch(() => false);
+
+    if (!visible) {
+      continue;
+    }
+
+    const insideDialog =
+      await item.evaluate(
+        (element) => {
+          return Boolean(
+            element.closest(
+              '[role="dialog"]'
+            )
+          );
+        }
+      );
+
+    if (!insideDialog) {
+      continue;
+    }
+
+    console.log(
+      'Using fallback composer editor.'
+    );
+
+    return item;
   }
 
   return null;
 }
+
+
+/* =========================================================
+ * DEBUG SELECTED EDITOR
+ * ========================================================= */
+
+async function logSelectedComposerEditor(
+  composerEditor
+) {
+  if (!composerEditor) {
+    return;
+  }
+
+  const editorDebug =
+    await composerEditor.evaluate(
+      (element) => {
+        const rect =
+          element
+            .getBoundingClientRect();
+
+        return {
+          tag:
+            element.tagName,
+
+          role:
+            element.getAttribute(
+              'role'
+            ),
+
+          contenteditable:
+            element.getAttribute(
+              'contenteditable'
+            ),
+
+          ariaLabel:
+            element.getAttribute(
+              'aria-label'
+            ),
+
+          ariaPlaceholder:
+            element.getAttribute(
+              'aria-placeholder'
+            ),
+
+          text:
+            element.innerText ||
+            element.textContent ||
+            '',
+
+          width:
+            rect.width,
+
+          height:
+            rect.height,
+
+          htmlPreview:
+            element.innerHTML
+              ?.slice(
+                0,
+                300
+              )
+        };
+      }
+    );
+
+  console.log(
+    'Selected composer editor:',
+    editorDebug
+  );
+}
+
+
+/* =========================================================
+ * OPEN FACEBOOK COMPOSER
+ * ========================================================= */
 
 export async function openFacebookComposer(
   groupInput,
   options = {}
 ) {
   const timeout =
-    Number(options.timeout) ||
-    Number(process.env.DEFAULT_TIMEOUT_MS) ||
+    Number(
+      options.timeout
+    ) ||
+    Number(
+      process.env
+        .DEFAULT_TIMEOUT_MS
+    ) ||
     DEFAULT_TIMEOUT_MS;
 
-  const group = await resolveGroup(groupInput);
+  const group =
+    await resolveGroup(
+      groupInput
+    );
 
-  console.log('Launching Facebook browser...');
-  console.log(`Group: ${group.name}`);
-  console.log(`URL: ${group.url}`);
+  console.log(
+    'Launching Facebook browser...'
+  );
+
+  console.log(
+    `Group: ${group.name}`
+  );
+
+  console.log(
+    `URL: ${group.url}`
+  );
 
   const browserSession =
     options.browserSession ||
@@ -256,25 +608,42 @@ export async function openFacebookComposer(
       timeout
     });
 
-  const context = browserSession.context;
+  const context =
+    browserSession.context;
+
   const page =
     options.page ||
-    await getAutomationPage(context);
+    await getAutomationPage(
+      context
+    );
 
-  console.log('Opening Facebook Group...');
+  console.log(
+    'Opening Facebook Group...'
+  );
 
-  await page.goto(group.url, {
-    waitUntil: 'domcontentloaded',
-    timeout
-  });
+  await page.goto(
+    group.url,
+    {
+      waitUntil:
+        'domcontentloaded',
 
-  await page.waitForTimeout(3000);
+      timeout
+    }
+  );
+
+  await page.waitForTimeout(
+    3000
+  );
 
   const blockedState =
-    detectBlockedFacebookState(page);
+    detectBlockedFacebookState(
+      page
+    );
 
   if (blockedState) {
-    throw new Error(blockedState);
+    throw new Error(
+      blockedState
+    );
   }
 
   console.log(
@@ -282,7 +651,9 @@ export async function openFacebookComposer(
   );
 
   const composerTrigger =
-    await findComposerTrigger(page);
+    await findComposerTrigger(
+      page
+    );
 
   if (!composerTrigger) {
     throw new Error(
@@ -303,44 +674,90 @@ export async function openFacebookComposer(
     );
   }
 
-  await composerTrigger.scrollIntoViewIfNeeded();
+  await composerTrigger
+    .scrollIntoViewIfNeeded();
 
   await composerTrigger.click({
-    timeout: COMPOSER_TIMEOUT_MS
+    timeout:
+      COMPOSER_TIMEOUT_MS
   });
 
-  console.log('Waiting for composer dialog...');
+  console.log(
+    'Waiting for composer dialog...'
+  );
 
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(
+    1500
+  );
 
   const composerDialog =
-    await findComposerDialog(page);
+    await findComposerDialog(
+      page
+    );
 
-  const composerEditor =
-    await findComposerEditor(page);
-
-  if (!composerDialog || !composerEditor) {
+  if (!composerDialog) {
     throw new Error(
       [
-        'The composer trigger was clicked, but the composer could not be verified.',
+        'The composer trigger was clicked, but the composer dialog could not be found.',
         '',
         `Group: ${group.name}`,
+        `URL: ${group.url}`,
+        '',
         'The browser will remain open for inspection.'
       ].join('\n')
     );
   }
 
+  /*
+   * Quan trọng:
+   * Chỉ tìm editor SAU KHI đã tìm được đúng dialog.
+   */
+  const composerEditor =
+    await findComposerEditor(
+      page,
+      composerDialog
+    );
+
+  if (!composerEditor) {
+    throw new Error(
+      [
+        'The composer dialog opened, but the content editor could not be found.',
+        '',
+        `Group: ${group.name}`,
+        `URL: ${group.url}`,
+        '',
+        'The browser will remain open for inspection.'
+      ].join('\n')
+    );
+  }
+
+  await logSelectedComposerEditor(
+    composerEditor
+  );
+
   console.log('');
   console.log(
     'Facebook composer opened successfully.'
   );
-  console.log(`Group key: ${group.groupKey}`);
-  console.log(`Group name: ${group.name}`);
-  console.log(`Current URL: ${page.url()}`);
+
+  console.log(
+    `Group key: ${group.groupKey}`
+  );
+
+  console.log(
+    `Group name: ${group.name}`
+  );
+
+  console.log(
+    `Current URL: ${page.url()}`
+  );
+
   console.log('');
+
   console.log(
     'No content has been inserted.'
   );
+
   console.log(
     'The Post button has not been clicked.'
   );
@@ -355,8 +772,14 @@ export async function openFacebookComposer(
   };
 }
 
+
+/* =========================================================
+ * CLI TEST
+ * ========================================================= */
+
 async function run() {
-  const groupId = process.argv[2];
+  const groupId =
+    process.argv[2];
 
   if (!groupId) {
     console.error(
@@ -364,27 +787,49 @@ async function run() {
     );
 
     process.exitCode = 1;
+
     return;
   }
 
   try {
-    await openFacebookComposer(groupId);
+    await openFacebookComposer(
+      groupId
+    );
   } catch (error) {
     console.error('');
-    console.error('Open composer test failed.');
-    console.error(error.message);
+
+    console.error(
+      'Open composer test failed.'
+    );
+
+    console.error(
+      error.message
+    );
 
     process.exitCode = 1;
   }
 }
 
+
+/* =========================================================
+ * DIRECT EXECUTION
+ * ========================================================= */
+
 const currentFilePath =
-  fileURLToPath(import.meta.url);
+  fileURLToPath(
+    import.meta.url
+  );
 
-const executedFilePath = process.argv[1]
-  ? path.resolve(process.argv[1])
-  : null;
+const executedFilePath =
+  process.argv[1]
+    ? path.resolve(
+        process.argv[1]
+      )
+    : null;
 
-if (executedFilePath === currentFilePath) {
+if (
+  executedFilePath ===
+  currentFilePath
+) {
   await run();
 }
