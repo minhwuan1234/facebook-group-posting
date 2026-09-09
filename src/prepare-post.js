@@ -460,162 +460,144 @@ async function uploadComposerImage(
   imagePath
 ) {
   console.log('');
-  console.log(
-    '=============================='
-  );
+  console.log('==============================');
+  console.log('STEP 2: UPLOAD IMAGE');
+  console.log('==============================');
 
-  console.log(
-    'STEP 2: UPLOAD IMAGE'
-  );
+  console.log(`Image path: ${imagePath}`);
 
-  console.log(
-    '=============================='
-  );
-
-  console.log(
-    `Image path: ${imagePath}`
-  );
-
-  const fileInputCandidates = [
-    composerDialog.locator(
-      'input[type="file"][accept*="image"]'
-    ),
-
+  /*
+   * Chỉ tìm input nằm trong đúng composer dialog.
+   * Không fallback ra toàn page để tránh bắt nhầm input.
+   */
+  const inputs =
     composerDialog.locator(
       'input[type="file"]'
-    ),
+    );
 
-    page.locator(
-      '[role="dialog"] input[type="file"][accept*="image"]'
-    ),
+  const inputCount =
+    await inputs.count();
 
-    page.locator(
-      '[role="dialog"] input[type="file"]'
-    ),
+  console.log(
+    `File inputs inside composer: ${inputCount}`
+  );
 
-    page.locator(
-      'input[type="file"][accept*="image"]'
-    )
-  ];
+  if (inputCount === 0) {
+    throw new Error(
+      [
+        'No file input found inside the Facebook composer.',
+        '',
+        'The image has not been inserted.',
+        'The Post button has not been clicked.'
+      ].join('\n')
+    );
+  }
 
   let fileInput = null;
 
+  /*
+   * Ưu tiên input cho image.
+   */
   for (
-    const candidate
-    of fileInputCandidates
+    let index = 0;
+    index < inputCount;
+    index += 1
   ) {
-    const count =
-      await candidate.count();
+    const item =
+      inputs.nth(index);
+
+    const info =
+      await item.evaluate(
+        (element) => ({
+          accept:
+            element.getAttribute('accept') || '',
+
+          disabled:
+            Boolean(element.disabled),
+
+          multiple:
+            Boolean(element.multiple),
+
+          html:
+            element.outerHTML.slice(
+              0,
+              400
+            )
+        })
+      );
 
     console.log(
-      `File input candidate count: ${count}`
+      `File input ${index + 1}:`,
+      info
     );
 
+    if (info.disabled) {
+      continue;
+    }
+
+    const accept =
+      info.accept.toLowerCase();
+
+    if (
+      accept.includes('image') ||
+      accept.includes('.jpg') ||
+      accept.includes('.jpeg') ||
+      accept.includes('.png')
+    ) {
+      fileInput = item;
+
+      console.log(
+        `Selected image input: ${index + 1}`
+      );
+
+      break;
+    }
+  }
+
+  /*
+   * Nếu không có accept rõ ràng,
+   * dùng input enabled đầu tiên trong composer.
+   */
+  if (!fileInput) {
     for (
       let index = 0;
-      index < count;
+      index < inputCount;
       index += 1
     ) {
       const item =
-        candidate.nth(index);
+        inputs.nth(index);
 
-      const info =
+      const disabled =
         await item.evaluate(
-          (element) => ({
-            type:
-              element.getAttribute(
-                'type'
-              ),
+          (element) =>
+            Boolean(element.disabled)
+        );
 
-            accept:
-              element.getAttribute(
-                'accept'
-              ),
+      if (!disabled) {
+        fileInput = item;
 
-            multiple:
-              Boolean(
-                element.multiple
-              ),
-
-            disabled:
-              Boolean(
-                element.disabled
-              ),
-
-            outerHTML:
-              element.outerHTML
-                .slice(
-                  0,
-                  400
-                )
-          })
-        ).catch(() => null);
-
-      console.log(
-        'File input candidate:',
-        info
-      );
-
-      if (
-        info &&
-        !info.disabled
-      ) {
-        fileInput =
-          item;
+        console.log(
+          `Using fallback file input: ${index + 1}`
+        );
 
         break;
       }
-    }
-
-    if (fileInput) {
-      break;
     }
   }
 
   if (!fileInput) {
     throw new Error(
       [
-        'Could not find a usable Facebook image file input.',
+        'No usable file input found inside the Facebook composer.',
         '',
+        'The image has not been inserted.',
         'The Post button has not been clicked.'
       ].join('\n')
     );
   }
 
-  const selectedInputInfo =
-    await fileInput.evaluate(
-      (element) => ({
-        accept:
-          element.getAttribute(
-            'accept'
-          ),
-
-        multiple:
-          Boolean(
-            element.multiple
-          ),
-
-        disabled:
-          Boolean(
-            element.disabled
-          ),
-
-        outerHTML:
-          element.outerHTML
-            .slice(
-              0,
-              400
-            )
-      })
-    );
-
   console.log(
-    'Selected file input:',
-    selectedInputInfo
-  );
-
-  console.log(
-    'Setting image file...'
+    'Calling setInputFiles()...'
   );
 
   await fileInput.setInputFiles(
@@ -623,171 +605,150 @@ async function uploadComposerImage(
   );
 
   await page.waitForTimeout(
-    500
+    1000
   );
 
-  const filesInfo =
+  /*
+   * Check xem browser có thật sự gắn file chưa.
+   */
+  const attachedFiles =
     await fileInput.evaluate(
       (element) => {
         const files =
           element.files;
 
         if (!files) {
-          return {
-            count: 0,
-            files: []
-          };
+          return [];
         }
 
-        return {
-          count:
-            files.length,
+        return Array.from(files)
+          .map(
+            (file) => ({
+              name:
+                file.name,
 
-          files:
-            Array.from(files)
-              .map(
-                (file) => ({
-                  name:
-                    file.name,
+              type:
+                file.type,
 
-                  type:
-                    file.type,
-
-                  size:
-                    file.size
-                })
-              )
-        };
+              size:
+                file.size
+            })
+          );
       }
     );
 
   console.log(
-    'Files attached to input:',
-    filesInfo
+    'Attached files:',
+    attachedFiles
   );
 
   if (
-    filesInfo.count < 1
+    attachedFiles.length === 0
   ) {
     throw new Error(
       [
-        'setInputFiles() completed, but the file input contains no files.',
+        'setInputFiles() ran, but no file is attached to the input.',
         '',
+        'The image has not been inserted.',
         'The Post button has not been clicked.'
       ].join('\n')
     );
   }
 
   console.log(
-    'Image file attached to input successfully.'
+    'File successfully attached to browser input.'
   );
 
+  /*
+   * Chờ Facebook render preview.
+   */
   console.log(
     'Waiting for Facebook image preview...'
   );
 
-  const uploadDeadline =
-    Date.now() + 120_000;
+  const deadline =
+    Date.now() + 30_000;
 
   while (
-    Date.now() <
-    uploadDeadline
+    Date.now() < deadline
   ) {
-    const previewCandidates = [
-      composerDialog.locator(
-        'img[src^="blob:"]'
-      ),
-
-      composerDialog.locator(
-        'img[src*="fbcdn.net"]'
-      ),
-
-      composerDialog.locator(
-        '[role="img"][style*="background-image"]'
-      ),
-
+    const images =
       composerDialog.locator(
         'img'
-      )
-    ];
+      );
+
+    const imageCount =
+      await images.count();
+
+    console.log(
+      `Visible image candidates: ${imageCount}`
+    );
 
     for (
-      const candidate
-      of previewCandidates
+      let index = 0;
+      index < imageCount;
+      index += 1
     ) {
-      const count =
-        await candidate.count();
+      const image =
+        images.nth(index);
 
-      for (
-        let index = 0;
-        index < count;
-        index += 1
-      ) {
-        const preview =
-          candidate.nth(index);
+      const visible =
+        await image
+          .isVisible()
+          .catch(() => false);
 
-        const visible =
-          await preview
-            .isVisible()
-            .catch(() => false);
+      if (!visible) {
+        continue;
+      }
 
-        if (!visible) {
-          continue;
-        }
+      const info =
+        await image.evaluate(
+          (element) => {
+            const rect =
+              element.getBoundingClientRect();
 
-        const info =
-          await preview.evaluate(
-            (element) => {
-              const rect =
-                element
-                  .getBoundingClientRect();
+            return {
+              src:
+                element.getAttribute('src') || '',
 
-              return {
-                tag:
-                  element.tagName,
+              width:
+                rect.width,
 
-                src:
-                  element.getAttribute(
-                    'src'
-                  ),
+              height:
+                rect.height,
 
-                role:
-                  element.getAttribute(
-                    'role'
-                  ),
-
-                width:
-                  rect.width,
-
-                height:
-                  rect.height
-              };
-            }
-          ).catch(() => null);
-
-        if (
-          !info ||
-          info.width <= 0 ||
-          info.height <= 0
-        ) {
-          continue;
-        }
-
-        /*
-         * Tránh nhận nhầm avatar/icon rất nhỏ.
-         */
-        if (
-          info.width < 80 &&
-          info.height < 80
-        ) {
-          continue;
-        }
-
-        console.log(
-          'Image preview candidate:',
-          info
+              alt:
+                element.getAttribute('alt') || ''
+            };
+          }
         );
 
+      /*
+       * Loại avatar/icon nhỏ.
+       */
+      if (
+        info.width < 100 ||
+        info.height < 100
+      ) {
+        continue;
+      }
+
+      console.log(
+        'Possible image preview:',
+        info
+      );
+
+      /*
+       * Preview Facebook thường là blob hoặc fbcdn.
+       */
+      if (
+        info.src.startsWith('blob:') ||
+        info.src.includes('fbcdn.net') ||
+        (
+          info.width >= 200 &&
+          info.height >= 200
+        )
+      ) {
         console.log(
           'Image preview detected successfully.'
         );
@@ -803,10 +764,11 @@ async function uploadComposerImage(
 
   throw new Error(
     [
-      'The image was attached to the file input, but Facebook preview could not be verified.',
+      'The image file is attached to the input,',
+      'but Facebook did not render an image preview.',
       '',
       'The Post button has not been clicked.',
-      'Inspect the open composer manually.'
+      'Inspect the composer manually.'
     ].join('\n')
   );
 }
