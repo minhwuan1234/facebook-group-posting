@@ -23,48 +23,235 @@ import {
   markGroupPrepared
 } from './post-progress.js';
 
+
+/* =========================================================
+ * CONTENT HELPERS
+ * ========================================================= */
+
 function normaliseContent(value) {
-  return String(value)
+  return String(value ?? '')
     .replace(/\r\n/g, '\n')
     .replace(/\u00a0/g, ' ')
+    .replace(/\u200b/g, '')
     .trim();
 }
+
 
 async function readComposerContent(
   composerEditor
 ) {
-  const tagName =
-    await composerEditor.evaluate(
-      (element) =>
-        element.tagName.toLowerCase()
-    );
+  return composerEditor.evaluate(
+    (element) => {
+      if (
+        element.tagName === 'TEXTAREA' ||
+        element.tagName === 'INPUT'
+      ) {
+        return element.value || '';
+      }
 
-  if (
-    tagName === 'textarea' ||
-    tagName === 'input'
-  ) {
-    return composerEditor.inputValue();
-  }
-
-  return composerEditor.innerText();
+      return (
+        element.innerText ||
+        element.textContent ||
+        ''
+      );
+    }
+  );
 }
 
+
+/*
+ * Facebook composer thường là contenteditable.
+ *
+ * Không dùng locator.fill() nữa vì Facebook editor
+ * có thể không nhận state đúng.
+ *
+ * Flow mới:
+ *
+ * click editor
+ * → focus
+ * → select all
+ * → clear
+ * → keyboard.insertText()
+ * → chờ Facebook cập nhật state
+ */
 async function insertComposerContent(
+  page,
   composerEditor,
   content
 ) {
-  await composerEditor.click();
+  console.log('');
+  console.log('Inserting JD content...');
 
-  await composerEditor.fill(content);
+  const text =
+    String(content ?? '');
+
+  if (!text.trim()) {
+    throw new Error(
+      'JD content is empty.'
+    );
+  }
+
+  await composerEditor.waitFor({
+    state: 'visible',
+    timeout: 15_000
+  });
+
+  await composerEditor.scrollIntoViewIfNeeded();
+
+  await composerEditor.click({
+    timeout: 15_000
+  });
+
+  await composerEditor.evaluate(
+    (element) => {
+      element.focus();
+    }
+  );
+
+  await page.waitForTimeout(300);
+
+  /*
+   * Clear content hiện tại.
+   */
+  await page.keyboard.press(
+    process.platform === 'darwin'
+      ? 'Meta+A'
+      : 'Control+A'
+  );
+
+  await page.keyboard.press(
+    'Backspace'
+  );
+
+  await page.waitForTimeout(300);
+
+  /*
+   * Insert text bằng keyboard để Facebook nhận input event.
+   */
+  await page.keyboard.insertText(
+    text
+  );
+
+  await page.waitForTimeout(1000);
+
+  console.log(
+    'JD content input completed.'
+  );
 }
+
+
+async function verifyComposerContent(
+  page,
+  composerEditor,
+  expectedContent
+) {
+  const expected =
+    normaliseContent(
+      expectedContent
+    );
+
+  /*
+   * Facebook có thể update DOM chậm một chút,
+   * nên retry thay vì đọc ngay một lần.
+   */
+  const deadline =
+    Date.now() + 10_000;
+
+  let actual = '';
+
+  while (
+    Date.now() < deadline
+  ) {
+    actual =
+      normaliseContent(
+        await readComposerContent(
+          composerEditor
+        ).catch(
+          () => ''
+        )
+      );
+
+    if (
+      actual === expected
+    ) {
+      console.log(
+        'JD content verified successfully.'
+      );
+
+      return actual;
+    }
+
+    /*
+     * Một số editor của Facebook có thể tạo child
+     * contenteditable mới sau khi nhập.
+     */
+    if (!actual) {
+      const fallbackEditor =
+        composerEditor.locator(
+          '[contenteditable="true"]'
+        ).first();
+
+      const fallbackCount =
+        await fallbackEditor
+          .count()
+          .catch(() => 0);
+
+      if (fallbackCount > 0) {
+        actual =
+          normaliseContent(
+            await fallbackEditor
+              .innerText()
+              .catch(() => '')
+          );
+
+        if (
+          actual === expected
+        ) {
+          console.log(
+            'JD content verified successfully.'
+          );
+
+          return actual;
+        }
+      }
+    }
+
+    await page.waitForTimeout(
+      500
+    );
+  }
+
+  throw new Error(
+    [
+      'JD content was inserted, but verification failed.',
+      '',
+      `Expected length: ${expected.length}`,
+      `Actual length: ${actual.length}`,
+      '',
+      'Inspect the open composer manually.',
+      'The Post button has not been clicked.'
+    ].join('\n')
+  );
+}
+
+
+/* =========================================================
+ * IMAGE UPLOAD
+ * ========================================================= */
 
 async function uploadComposerImage(
   page,
   composerDialog,
   imagePath
 ) {
-  console.log('Uploading image...');
-  console.log(`Image path: ${imagePath}`);
+  console.log('');
+  console.log(
+    'Uploading image...'
+  );
+
+  console.log(
+    `Image path: ${imagePath}`
+  );
 
   const fileInputCandidates = [
     composerDialog.locator(
@@ -91,12 +278,16 @@ async function uploadComposerImage(
   let fileInput = null;
 
   for (
-    const candidate of fileInputCandidates
+    const candidate
+    of fileInputCandidates
   ) {
-    const count = await candidate.count();
+    const count =
+      await candidate.count();
 
     if (count > 0) {
-      fileInput = candidate.first();
+      fileInput =
+        candidate.first();
+
       break;
     }
   }
@@ -112,7 +303,9 @@ async function uploadComposerImage(
     );
   }
 
-  await fileInput.setInputFiles(imagePath);
+  await fileInput.setInputFiles(
+    imagePath
+  );
 
   console.log(
     'Image file selected. Waiting for Facebook preview...'
@@ -121,7 +314,10 @@ async function uploadComposerImage(
   const uploadDeadline =
     Date.now() + 120_000;
 
-  while (Date.now() < uploadDeadline) {
+  while (
+    Date.now() <
+    uploadDeadline
+  ) {
     const previewCandidates = [
       composerDialog.locator(
         'img[src^="blob:"]'
@@ -137,9 +333,11 @@ async function uploadComposerImage(
     ];
 
     for (
-      const candidate of previewCandidates
+      const candidate
+      of previewCandidates
     ) {
-      const count = await candidate.count();
+      const count =
+        await candidate.count();
 
       for (
         let index = 0;
@@ -149,11 +347,14 @@ async function uploadComposerImage(
         const preview =
           candidate.nth(index);
 
-        if (
+        const visible =
           await preview
             .isVisible()
-            .catch(() => false)
-        ) {
+            .catch(
+              () => false
+            );
+
+        if (visible) {
           console.log(
             'Image preview detected successfully.'
           );
@@ -163,7 +364,9 @@ async function uploadComposerImage(
       }
     }
 
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(
+      1000
+    );
   }
 
   throw new Error(
@@ -176,11 +379,19 @@ async function uploadComposerImage(
   );
 }
 
+
+/* =========================================================
+ * INPUT VALIDATION
+ * ========================================================= */
+
 function validateStt(stt) {
-  const numericStt = Number(stt);
+  const numericStt =
+    Number(stt);
 
   if (
-    !Number.isInteger(numericStt) ||
+    !Number.isInteger(
+      numericStt
+    ) ||
     numericStt <= 0
   ) {
     throw new Error(
@@ -191,6 +402,7 @@ function validateStt(stt) {
   return numericStt;
 }
 
+
 function resolveNumericGroupNumber(
   groupNumber,
   totalGroups
@@ -199,7 +411,9 @@ function resolveNumericGroupNumber(
     Number(groupNumber);
 
   if (
-    !Number.isInteger(numericGroupNumber) ||
+    !Number.isInteger(
+      numericGroupNumber
+    ) ||
     numericGroupNumber <= 0
   ) {
     throw new Error(
@@ -213,7 +427,10 @@ function resolveNumericGroupNumber(
     );
   }
 
-  if (numericGroupNumber > totalGroups) {
+  if (
+    numericGroupNumber >
+    totalGroups
+  ) {
     throw new Error(
       [
         `Invalid group number: ${numericGroupNumber}.`,
@@ -227,15 +444,23 @@ function resolveNumericGroupNumber(
   return numericGroupNumber;
 }
 
+
+/* =========================================================
+ * TARGET GROUP
+ * ========================================================= */
+
 async function resolveTargetGroup(
   stt,
   groupSelection,
   groups
 ) {
   if (
-    String(groupSelection)
+    String(
+      groupSelection
+    )
       .trim()
-      .toLowerCase() !== 'next'
+      .toLowerCase() !==
+    'next'
   ) {
     const groupNumber =
       resolveNumericGroupNumber(
@@ -245,17 +470,27 @@ async function resolveTargetGroup(
 
     return {
       groupNumber,
+
       targetGroup:
-        groups[groupNumber - 1],
-      selectionMode: 'manual'
+        groups[
+          groupNumber - 1
+        ],
+
+      selectionMode:
+        'manual'
     };
   }
 
   const progress =
-    await getPostProgress(stt);
+    await getPostProgress(
+      stt
+    );
 
   const preparedGroupKeys =
-    new Set(progress.preparedGroupKeys);
+    new Set(
+      progress
+        .preparedGroupKeys
+    );
 
   const nextGroupIndex =
     groups.findIndex(
@@ -265,7 +500,9 @@ async function resolveTargetGroup(
         )
     );
 
-  if (nextGroupIndex === -1) {
+  if (
+    nextGroupIndex === -1
+  ) {
     throw new Error(
       [
         `All ${groups.length} assigned groups have already been prepared for STT ${stt}.`,
@@ -281,11 +518,19 @@ async function resolveTargetGroup(
       nextGroupIndex + 1,
 
     targetGroup:
-      groups[nextGroupIndex],
+      groups[
+        nextGroupIndex
+      ],
 
-    selectionMode: 'next'
+    selectionMode:
+      'next'
   };
 }
+
+
+/* =========================================================
+ * FACEBOOK PUBLISH
+ * ========================================================= */
 
 async function publishFacebookPost(
   page,
@@ -297,14 +542,21 @@ async function publishFacebookPost(
   );
 
   const postButtonCandidates = [
-    composerDialog.getByRole('button', {
-      name: /^(đăng|post)$/i
-    }),
+    composerDialog.getByRole(
+      'button',
+      {
+        name:
+          /^(đăng|post)$/i
+      }
+    ),
 
     composerDialog
-      .locator('[role="button"]')
+      .locator(
+        '[role="button"]'
+      )
       .filter({
-        hasText: /^(đăng|post)$/i
+        hasText:
+          /^(đăng|post)$/i
       }),
 
     composerDialog.locator(
@@ -315,12 +567,17 @@ async function publishFacebookPost(
       '[role="button"][aria-label="Post"]'
     ),
 
-    page.getByRole('button', {
-      name: /^(đăng|post)$/i
-    })
+    page.getByRole(
+      'button',
+      {
+        name:
+          /^(đăng|post)$/i
+      }
+    )
   ];
 
-  const deadline = Date.now() + 30_000;
+  const deadline =
+    Date.now() + 30_000;
 
   let postButton = null;
 
@@ -329,7 +586,8 @@ async function publishFacebookPost(
     !postButton
   ) {
     for (
-      const candidate of postButtonCandidates
+      const candidate
+      of postButtonCandidates
     ) {
       const count =
         await candidate.count();
@@ -345,7 +603,9 @@ async function publishFacebookPost(
         const isVisible =
           await button
             .isVisible()
-            .catch(() => false);
+            .catch(
+              () => false
+            );
 
         if (!isVisible) {
           continue;
@@ -365,15 +625,20 @@ async function publishFacebookPost(
                   : false;
 
               const rect =
-                element.getBoundingClientRect();
+                element
+                  .getBoundingClientRect();
 
               return {
                 ariaDisabled,
                 nativeDisabled,
-                width: rect.width,
-                height: rect.height,
+                width:
+                  rect.width,
+                height:
+                  rect.height,
                 text:
-                  element.textContent?.trim()
+                  element
+                    .textContent
+                    ?.trim()
               };
             }
           );
@@ -383,14 +648,20 @@ async function publishFacebookPost(
           state.height > 0;
 
         const isEnabled =
-          state.ariaDisabled !== 'true' &&
-          state.nativeDisabled !== true;
+          state
+            .ariaDisabled !==
+            'true' &&
+          state
+            .nativeDisabled !==
+            true;
 
         if (
           hasUsableSize &&
           isEnabled
         ) {
-          postButton = button;
+          postButton =
+            button;
+
           break;
         }
       }
@@ -405,7 +676,9 @@ async function publishFacebookPost(
         'Post button is not ready yet. Waiting...'
       );
 
-      await page.waitForTimeout(1000);
+      await page.waitForTimeout(
+        1000
+      );
     }
   }
 
@@ -426,7 +699,8 @@ async function publishFacebookPost(
     'Enabled Post button found.'
   );
 
-  await postButton.scrollIntoViewIfNeeded();
+  await postButton
+    .scrollIntoViewIfNeeded();
 
   console.log(
     'Publishing Facebook post...'
@@ -440,12 +714,15 @@ async function publishFacebookPost(
     Date.now() + 90_000;
 
   while (
-    Date.now() < publishDeadline
+    Date.now() <
+    publishDeadline
   ) {
     const dialogVisible =
       await composerDialog
         .isVisible()
-        .catch(() => false);
+        .catch(
+          () => false
+        );
 
     if (!dialogVisible) {
       console.log(
@@ -453,7 +730,8 @@ async function publishFacebookPost(
       );
 
       return {
-        status: 'submitted'
+        status:
+          'submitted'
       };
     }
 
@@ -462,18 +740,22 @@ async function publishFacebookPost(
         /pending approval|awaiting approval|chờ phê duyệt|đang chờ duyệt|quản trị viên phê duyệt/i
       );
 
-    if (
+    const pendingVisible =
       await pendingApproval
         .first()
         .isVisible()
-        .catch(() => false)
-    ) {
+        .catch(
+          () => false
+        );
+
+    if (pendingVisible) {
       console.log(
         'Post submitted and is waiting for group approval.'
       );
 
       return {
-        status: 'pending_approval'
+        status:
+          'pending_approval'
       };
     }
 
@@ -482,12 +764,15 @@ async function publishFacebookPost(
         /couldn't post|unable to post|something went wrong|không thể đăng|đã xảy ra lỗi|thử lại/i
       );
 
-    if (
+    const errorVisible =
       await errorMessage
         .first()
         .isVisible()
-        .catch(() => false)
-    ) {
+        .catch(
+          () => false
+        );
+
+    if (errorVisible) {
       throw new Error(
         [
           'Facebook displayed an error after clicking Post.',
@@ -497,7 +782,9 @@ async function publishFacebookPost(
       );
     }
 
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(
+      1000
+    );
   }
 
   throw new Error(
@@ -509,6 +796,11 @@ async function publishFacebookPost(
     ].join('\n')
   );
 }
+
+
+/* =========================================================
+ * PREPARE + POST ONE GROUP
+ * ========================================================= */
 
 export async function prepareGroupPost(
   stt,
@@ -536,7 +828,8 @@ export async function prepareGroupPost(
     );
 
   if (
-    groupResult.groups.length === 0
+    groupResult.groups
+      .length === 0
   ) {
     throw new Error(
       `Post STT ${numericStt} has no enabled groups.`
@@ -547,11 +840,12 @@ export async function prepareGroupPost(
     groupNumber,
     targetGroup,
     selectionMode
-  } = await resolveTargetGroup(
-    numericStt,
-    groupSelection,
-    groupResult.groups
-  );
+  } =
+    await resolveTargetGroup(
+      numericStt,
+      groupSelection,
+      groupResult.groups
+    );
 
   console.log('');
   console.log(
@@ -562,7 +856,9 @@ export async function prepareGroupPost(
     `${targetGroup.groupKey} — ${targetGroup.name}`
   );
 
-  console.log(`URL: ${targetGroup.url}`);
+  console.log(
+    `URL: ${targetGroup.url}`
+  );
 
   console.log(
     `Selection mode: ${selectionMode}`
@@ -577,96 +873,83 @@ export async function prepareGroupPost(
     page,
     composerDialog,
     composerEditor
-  } = composerSession;
+  } =
+    composerSession;
 
-  console.log('');
-  console.log(
-    'Inserting JD content...'
-  );
+
+  /* =======================================================
+   * INSERT CONTENT
+   * ======================================================= */
 
   await insertComposerContent(
+    page,
     composerEditor,
     preparedPost.jd
   );
 
-  await page.waitForTimeout(1500);
-
-  const insertedContent =
-    await readComposerContent(
-      composerEditor
-    );
-
-  const expectedContent =
-    normaliseContent(
-      preparedPost.jd
-    );
-
-  const actualContent =
-    normaliseContent(
-      insertedContent
-    );
-
-  if (
-    actualContent !== expectedContent
-  ) {
-    throw new Error(
-      [
-        'JD content was inserted, but verification failed.',
-        '',
-        `Expected length: ${expectedContent.length}`,
-        `Actual length: ${actualContent.length}`,
-        '',
-        'Inspect the open composer manually.',
-        'The Post button has not been clicked.'
-      ].join('\n')
-    );
-  }
-
-  console.log(
-    'JD content verified successfully.'
+  await verifyComposerContent(
+    page,
+    composerEditor,
+    preparedPost.jd
   );
 
-  console.log('');
+
+  /* =======================================================
+   * UPLOAD IMAGE
+   * ======================================================= */
 
   await uploadComposerImage(
     page,
     composerDialog,
-    preparedPost.image.absolutePath
+    preparedPost
+      .image
+      .absolutePath
   );
 
-const publishResult =
-  await publishFacebookPost(
-    page,
-    composerDialog
-  );
 
-const updatedProgress =
-  await markGroupPrepared({
-    stt: numericStt,
-    groupNumber,
-    groupKey: targetGroup.groupKey
-  });
+  /* =======================================================
+   * AUTO POST
+   * ======================================================= */
 
-console.log('');
-console.log(
-  'Facebook post submitted successfully.'
-);
+  const publishResult =
+    await publishFacebookPost(
+      page,
+      composerDialog
+    );
 
-console.log(
-  `Publish status: ${publishResult.status}`
-);
 
-console.log(
-  `Prepared groups: ${updatedProgress.preparedGroupKeys.length}/${groupResult.groups.length}`
-);
-  
+  /* =======================================================
+   * UPDATE PROGRESS
+   * ======================================================= */
+
+  const updatedProgress =
+    await markGroupPrepared({
+      stt:
+        numericStt,
+
+      groupNumber,
+
+      groupKey:
+        targetGroup
+          .groupKey
+    });
+
   console.log('');
   console.log(
-    'Progress updated successfully.'
+    'Facebook post submitted successfully.'
+  );
+
+  console.log(
+    `Publish status: ${publishResult.status}`
   );
 
   console.log(
     `Prepared groups: ${updatedProgress.preparedGroupKeys.length}/${groupResult.groups.length}`
+  );
+
+  console.log('');
+  console.log(
+    'Progress updated successfully.'
   );
 
   console.log('');
@@ -704,32 +987,47 @@ console.log(
   );
 
   console.log(
-     `Publish status: ${publishResult.status}`
+    `Publish status: ${publishResult.status}`
   );
 
+  await composerSession
+    .context
+    .close();
 
-  await composerSession.context.close();
-
-console.log(
-  'Facebook Chrome closed.'
-);
+  console.log(
+    'Facebook Chrome closed.'
+  );
 
   return {
-    ...composerSession,
     preparedPost,
     targetGroup,
     groupNumber,
+
     totalGroups:
-      groupResult.groups.length,
-    progress: updatedProgress
+      groupResult
+        .groups
+        .length,
+
+    publishStatus:
+      publishResult.status,
+
+    progress:
+      updatedProgress
   };
 }
 
+
+/* =========================================================
+ * CLI
+ * ========================================================= */
+
 async function run() {
-  const stt = process.argv[2];
+  const stt =
+    process.argv[2];
 
   const groupSelection =
-    process.argv[3] || 'next';
+    process.argv[3] ||
+    'next';
 
   if (!stt) {
     console.error(
@@ -747,6 +1045,7 @@ async function run() {
     );
 
     process.exitCode = 1;
+
     return;
   }
 
@@ -755,7 +1054,9 @@ async function run() {
   try {
     lockHandle =
       await acquireJobLock({
-        stt: Number(stt),
+        stt:
+          Number(stt),
+
         groupNumber:
           groupSelection
       });
@@ -770,11 +1071,14 @@ async function run() {
     );
   } catch (error) {
     console.error('');
+
     console.error(
       'Post preparation test failed.'
     );
 
-    console.error(error.message);
+    console.error(
+      error.message
+    );
 
     process.exitCode = 1;
   } finally {
@@ -792,17 +1096,26 @@ async function run() {
           'Could not release Facebook job lock.'
         );
 
-        console.error(error.message);
+        console.error(
+          error.message
+        );
       }
     }
   }
 }
 
+
+/* =========================================================
+ * DIRECT EXECUTION
+ * ========================================================= */
+
 const isDirectExecution =
   process.argv[1] &&
   import.meta.url ===
     pathToFileURL(
-      path.resolve(process.argv[1])
+      path.resolve(
+        process.argv[1]
+      )
     ).href;
 
 if (isDirectExecution) {
