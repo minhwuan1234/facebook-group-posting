@@ -159,7 +159,8 @@ async function insertComposerContent(
   );
 
   /*
-   * Lấy NGUYÊN content từ Supabase.
+   * Lấy nguyên JD từ Supabase.
+   * Không map.
    * Không thêm dấu "-".
    * Không tự format lại.
    */
@@ -266,22 +267,20 @@ async function insertComposerContent(
     300
   );
 
-  console.log(
-    'Typing raw JD from Supabase...'
-  );
-
   /*
-   * Paste/type đúng nguyên String(preparedPost.jd).
+   * Paste nguyên content từ Supabase
+   * trong một lần.
    */
-  await page.keyboard.type(
-    text,
-    {
-      delay: 1
-    }
+  console.log(
+    'Pasting raw JD from Supabase...'
+  );
+
+  await page.keyboard.insertText(
+    text
   );
 
   console.log(
-    'JD typing completed.'
+    'JD pasted successfully.'
   );
 
   await page.waitForTimeout(
@@ -289,7 +288,7 @@ async function insertComposerContent(
   );
 
   /*
-   * Verify text.
+   * Verify content.
    */
   const deadline =
     Date.now() + 10_000;
@@ -346,11 +345,10 @@ async function insertComposerContent(
 /* =========================================================
  * IMAGE UPLOAD
  *
- * RESTORED OLD WORKING FLOW
+ * OLD WORKING FLOW
  *
  * Không click "Ảnh/video".
  * Tìm thẳng input[type="file"].
- * Sau đó setInputFiles(imagePath).
  * ========================================================= */
 
 async function uploadComposerImage(
@@ -379,9 +377,6 @@ async function uploadComposerImage(
     `Image path: ${imagePath}`
   );
 
-  /*
-   * Đây là đúng thứ tự selector flow cũ.
-   */
   const fileInputCandidates = [
     composerDialog.locator(
       'input[type="file"][accept*="image"]'
@@ -432,9 +427,6 @@ async function uploadComposerImage(
     );
   }
 
-  /*
-   * Debug input được chọn.
-   */
   const fileInputDebug =
     await fileInput.evaluate(
       (element) => ({
@@ -467,10 +459,6 @@ async function uploadComposerImage(
     fileInputDebug
   );
 
-  /*
-   * Flow cũ:
-   * set file trực tiếp.
-   */
   await fileInput.setInputFiles(
     imagePath
   );
@@ -479,10 +467,6 @@ async function uploadComposerImage(
     'Image file selected. Waiting for Facebook preview...'
   );
 
-  /*
-   * Debug thêm xem input có file thật không.
-   * Không thay đổi behavior cũ.
-   */
   const attachedFiles =
     await fileInput.evaluate(
       (element) => {
@@ -515,6 +499,19 @@ async function uploadComposerImage(
     'Attached files:',
     attachedFiles
   );
+
+  if (
+    attachedFiles.length === 0
+  ) {
+    throw new Error(
+      [
+        'setInputFiles() completed, but no file is attached.',
+        '',
+        'The image has not been inserted.',
+        'The Post button has not been clicked.'
+      ].join('\n')
+    );
+  }
 
   const uploadDeadline =
     Date.now() + 120_000;
@@ -819,9 +816,7 @@ async function publishFacebookPost(
         const isVisible =
           await button
             .isVisible()
-            .catch(
-              () => false
-            );
+            .catch(() => false);
 
         if (!isVisible) {
           continue;
@@ -1104,7 +1099,7 @@ export async function prepareGroupPost(
 
 
   /* =======================================================
-   * IMAGE - OLD WORKING FLOW
+   * IMAGE
    * ======================================================= */
 
   await uploadComposerImage(
