@@ -63,9 +63,6 @@ async function readComposerContent(
   composerDialog,
   composerEditor
 ) {
-  /*
-   * Thử editor đã chọn trước.
-   */
   const selectedEditorText =
     await readElementContent(
       composerEditor
@@ -79,11 +76,6 @@ async function readComposerContent(
     return selectedEditorText;
   }
 
-  /*
-   * Nếu Facebook đã thay DOM sau khi gõ,
-   * scan lại tất cả textbox/contenteditable
-   * trong đúng composer dialog.
-   */
   const candidates = [
     composerDialog.locator(
       '[contenteditable="true"][role="textbox"]'
@@ -154,18 +146,16 @@ async function insertComposerContent(
   content
 ) {
   console.log('');
-  console.log(
-    '=============================='
-  );
+  console.log('==============================');
+  console.log('STEP 1: INSERT JD CONTENT');
+  console.log('==============================');
 
-  console.log(
-    'STEP 1: INSERT JD CONTENT'
-  );
-
-  console.log(
-    '=============================='
-  );
-
+  /*
+   * LẤY NGUYÊN CONTENT TỪ SUPABASE.
+   * Không map.
+   * Không thêm bullet.
+   * Không thêm dấu "-".
+   */
   const text =
     String(content ?? '');
 
@@ -184,56 +174,6 @@ async function insertComposerContent(
     timeout: 15_000
   });
 
-  const editorBefore =
-    await composerEditor.evaluate(
-      (element) => {
-        const rect =
-          element
-            .getBoundingClientRect();
-
-        return {
-          tag:
-            element.tagName,
-
-          role:
-            element.getAttribute(
-              'role'
-            ),
-
-          contenteditable:
-            element.getAttribute(
-              'contenteditable'
-            ),
-
-          ariaLabel:
-            element.getAttribute(
-              'aria-label'
-            ),
-
-          ariaPlaceholder:
-            element.getAttribute(
-              'aria-placeholder'
-            ),
-
-          text:
-            element.innerText ||
-            element.textContent ||
-            '',
-
-          width:
-            rect.width,
-
-          height:
-            rect.height
-        };
-      }
-    );
-
-  console.log(
-    'Editor before input:',
-    editorBefore
-  );
-
   await composerEditor
     .scrollIntoViewIfNeeded();
 
@@ -244,10 +184,6 @@ async function insertComposerContent(
   await composerEditor.click({
     timeout: 15_000
   });
-
-  console.log(
-    'Focusing composer editor...'
-  );
 
   await composerEditor.evaluate(
     (element) => {
@@ -296,11 +232,8 @@ async function insertComposerContent(
     activeElementInfo
   );
 
-  /*
-   * Clear composer hiện tại.
-   */
   console.log(
-    'Clearing existing composer content...'
+    'Clearing composer...'
   );
 
   await page.keyboard.press(
@@ -317,16 +250,13 @@ async function insertComposerContent(
     300
   );
 
-  /*
-   * Gõ text giống thao tác người dùng hơn.
-   *
-   * Không dùng fill().
-   * Không dùng insertText() ở bước chính.
-   */
   console.log(
-    'Typing JD content with keyboard...'
+    'Typing raw JD from Supabase...'
   );
 
+  /*
+   * Gõ đúng String(preparedPost.jd).
+   */
   await page.keyboard.type(
     text,
     {
@@ -335,18 +265,11 @@ async function insertComposerContent(
   );
 
   console.log(
-    'Keyboard typing completed.'
+    'JD typing completed.'
   );
 
   await page.waitForTimeout(
     1500
-  );
-
-  /*
-   * Verify.
-   */
-  console.log(
-    'Reading composer content back...'
   );
 
   const expectedContent =
@@ -393,49 +316,6 @@ async function insertComposerContent(
     );
   }
 
-  /*
-   * Debug editor state cuối.
-   */
-  const editorAfter =
-    await composerEditor.evaluate(
-      (element) => ({
-        tag:
-          element.tagName,
-
-        role:
-          element.getAttribute(
-            'role'
-          ),
-
-        contenteditable:
-          element.getAttribute(
-            'contenteditable'
-          ),
-
-        ariaLabel:
-          element.getAttribute(
-            'aria-label'
-          ),
-
-        text:
-          element.innerText ||
-          element.textContent ||
-          '',
-
-        htmlPreview:
-          element.innerHTML
-            ?.slice(
-              0,
-              500
-            )
-      })
-    ).catch(() => null);
-
-  console.log(
-    'Editor after failed input:',
-    editorAfter
-  );
-
   throw new Error(
     [
       'JD content insertion verification failed.',
@@ -443,10 +323,214 @@ async function insertComposerContent(
       `Expected length: ${expectedContent.length}`,
       `Actual length: ${actualContent.length}`,
       '',
-      'The Facebook composer did not contain the expected JD text.',
       'The Post button has not been clicked.'
     ].join('\n')
   );
+}
+
+
+/* =========================================================
+ * IMAGE ACTION BUTTON
+ * ========================================================= */
+
+async function findPhotoVideoButton(
+  page,
+  composerDialog
+) {
+  const patterns =
+    /ảnh\/video|ảnh|video|photo\/video|photo|image/i;
+
+  const candidates = [
+    composerDialog.getByRole(
+      'button',
+      {
+        name: patterns
+      }
+    ),
+
+    composerDialog.locator(
+      '[role="button"][aria-label*="Ảnh/video" i]'
+    ),
+
+    composerDialog.locator(
+      '[role="button"][aria-label*="Ảnh" i]'
+    ),
+
+    composerDialog.locator(
+      '[role="button"][aria-label*="Photo/video" i]'
+    ),
+
+    composerDialog.locator(
+      '[role="button"][aria-label*="Photo" i]'
+    ),
+
+    composerDialog
+      .locator(
+        '[role="button"]'
+      )
+      .filter({
+        hasText:
+          /ảnh\/video|photo\/video/i
+      }),
+
+    page.locator(
+      '[role="dialog"] [role="button"][aria-label*="Ảnh" i]'
+    ),
+
+    page.locator(
+      '[role="dialog"] [role="button"][aria-label*="Photo" i]'
+    )
+  ];
+
+  for (
+    const candidate
+    of candidates
+  ) {
+    const count =
+      await candidate.count();
+
+    for (
+      let index = 0;
+      index < count;
+      index += 1
+    ) {
+      const item =
+        candidate.nth(index);
+
+      const visible =
+        await item
+          .isVisible()
+          .catch(() => false);
+
+      if (!visible) {
+        continue;
+      }
+
+      const info =
+        await item.evaluate(
+          (element) => ({
+            text:
+              element.textContent
+                ?.trim() || '',
+
+            ariaLabel:
+              element.getAttribute(
+                'aria-label'
+              )
+          })
+        ).catch(() => null);
+
+      console.log(
+        'Photo/video button candidate:',
+        info
+      );
+
+      return item;
+    }
+  }
+
+  return null;
+}
+
+
+/* =========================================================
+ * FIND IMAGE INPUT
+ * ========================================================= */
+
+async function findImageFileInput(
+  page,
+  composerDialog
+) {
+  const candidates = [
+    composerDialog.locator(
+      'input[type="file"][accept*="image"]'
+    ),
+
+    composerDialog.locator(
+      'input[type="file"]'
+    ),
+
+    page.locator(
+      '[role="dialog"] input[type="file"][accept*="image"]'
+    ),
+
+    page.locator(
+      '[role="dialog"] input[type="file"]'
+    )
+  ];
+
+  for (
+    const candidate
+    of candidates
+  ) {
+    const count =
+      await candidate.count();
+
+    for (
+      let index = 0;
+      index < count;
+      index += 1
+    ) {
+      const item =
+        candidate.nth(index);
+
+      const info =
+        await item.evaluate(
+          (element) => ({
+            accept:
+              element.getAttribute(
+                'accept'
+              ) || '',
+
+            disabled:
+              Boolean(
+                element.disabled
+              ),
+
+            multiple:
+              Boolean(
+                element.multiple
+              ),
+
+            html:
+              element.outerHTML
+                .slice(
+                  0,
+                  500
+                )
+          })
+        ).catch(() => null);
+
+      console.log(
+        'File input candidate:',
+        info
+      );
+
+      if (
+        !info ||
+        info.disabled
+      ) {
+        continue;
+      }
+
+      const accept =
+        String(
+          info.accept
+        ).toLowerCase();
+
+      if (
+        accept.includes('image') ||
+        accept.includes('.png') ||
+        accept.includes('.jpg') ||
+        accept.includes('.jpeg') ||
+        accept === ''
+      ) {
+        return item;
+      }
+    }
+  }
+
+  return null;
 }
 
 
@@ -464,138 +548,135 @@ async function uploadComposerImage(
   console.log('STEP 2: UPLOAD IMAGE');
   console.log('==============================');
 
-  console.log(`Image path: ${imagePath}`);
-
-  /*
-   * Chỉ tìm input nằm trong đúng composer dialog.
-   * Không fallback ra toàn page để tránh bắt nhầm input.
-   */
-  const inputs =
-    composerDialog.locator(
-      'input[type="file"]'
-    );
-
-  const inputCount =
-    await inputs.count();
-
   console.log(
-    `File inputs inside composer: ${inputCount}`
+    `Image path: ${imagePath}`
   );
 
-  if (inputCount === 0) {
-    throw new Error(
-      [
-        'No file input found inside the Facebook composer.',
-        '',
-        'The image has not been inserted.',
-        'The Post button has not been clicked.'
-      ].join('\n')
-    );
-  }
-
-  let fileInput = null;
-
   /*
-   * Ưu tiên input cho image.
+   * Facebook thường tạo đúng upload UI
+   * sau khi click nút Ảnh/video.
    */
-  for (
-    let index = 0;
-    index < inputCount;
-    index += 1
-  ) {
-    const item =
-      inputs.nth(index);
+  console.log(
+    'Searching for Photo/Video button...'
+  );
 
-    const info =
-      await item.evaluate(
-        (element) => ({
-          accept:
-            element.getAttribute('accept') || '',
+  const photoButton =
+    await findPhotoVideoButton(
+      page,
+      composerDialog
+    );
 
-          disabled:
-            Boolean(element.disabled),
-
-          multiple:
-            Boolean(element.multiple),
-
-          html:
-            element.outerHTML.slice(
-              0,
-              400
-            )
-        })
-      );
+  if (photoButton) {
+    console.log(
+      'Photo/Video button found.'
+    );
 
     console.log(
-      `File input ${index + 1}:`,
-      info
+      'Clicking Photo/Video button...'
     );
 
-    if (info.disabled) {
-      continue;
-    }
+    await photoButton.click({
+      timeout: 15_000
+    });
 
-    const accept =
-      info.accept.toLowerCase();
+    await page.waitForTimeout(
+      1000
+    );
+  } else {
+    console.log(
+      'Photo/Video button was not found.'
+    );
 
-    if (
-      accept.includes('image') ||
-      accept.includes('.jpg') ||
-      accept.includes('.jpeg') ||
-      accept.includes('.png')
-    ) {
-      fileInput = item;
-
-      console.log(
-        `Selected image input: ${index + 1}`
-      );
-
-      break;
-    }
+    console.log(
+      'Trying existing file input directly...'
+    );
   }
 
   /*
-   * Nếu không có accept rõ ràng,
-   * dùng input enabled đầu tiên trong composer.
+   * Tìm input SAU khi đã click Ảnh/video.
    */
-  if (!fileInput) {
-    for (
-      let index = 0;
-      index < inputCount;
-      index += 1
-    ) {
-      const item =
-        inputs.nth(index);
+  console.log(
+    'Searching for image file input...'
+  );
 
-      const disabled =
-        await item.evaluate(
-          (element) =>
-            Boolean(element.disabled)
-        );
+  let fileInput =
+    await findImageFileInput(
+      page,
+      composerDialog
+    );
 
-      if (!disabled) {
-        fileInput = item;
+  /*
+   * Facebook có thể render input hơi chậm.
+   */
+  const inputDeadline =
+    Date.now() + 10_000;
 
-        console.log(
-          `Using fallback file input: ${index + 1}`
-        );
+  while (
+    !fileInput &&
+    Date.now() < inputDeadline
+  ) {
+    await page.waitForTimeout(
+      500
+    );
 
-        break;
-      }
-    }
+    fileInput =
+      await findImageFileInput(
+        page,
+        composerDialog
+      );
   }
 
   if (!fileInput) {
     throw new Error(
       [
-        'No usable file input found inside the Facebook composer.',
+        'Could not find the Facebook image upload input.',
         '',
+        'Photo/Video action was attempted.',
         'The image has not been inserted.',
         'The Post button has not been clicked.'
       ].join('\n')
     );
   }
 
+  console.log(
+    'Image file input found.'
+  );
+
+  const selectedInput =
+    await fileInput.evaluate(
+      (element) => ({
+        accept:
+          element.getAttribute(
+            'accept'
+          ),
+
+        multiple:
+          Boolean(
+            element.multiple
+          ),
+
+        disabled:
+          Boolean(
+            element.disabled
+          ),
+
+        html:
+          element.outerHTML
+            .slice(
+              0,
+              500
+            )
+      })
+    );
+
+  console.log(
+    'Selected image input:',
+    selectedInput
+  );
+
+  /*
+   * Attach file.
+   */
   console.log(
     'Calling setInputFiles()...'
   );
@@ -609,7 +690,7 @@ async function uploadComposerImage(
   );
 
   /*
-   * Check xem browser có thật sự gắn file chưa.
+   * Verify file đã thực sự vào input.
    */
   const attachedFiles =
     await fileInput.evaluate(
@@ -621,7 +702,8 @@ async function uploadComposerImage(
           return [];
         }
 
-        return Array.from(files)
+        return Array
+          .from(files)
           .map(
             (file) => ({
               name:
@@ -647,7 +729,7 @@ async function uploadComposerImage(
   ) {
     throw new Error(
       [
-        'setInputFiles() ran, but no file is attached to the input.',
+        'setInputFiles() completed, but no file is attached.',
         '',
         'The image has not been inserted.',
         'The Post button has not been clicked.'
@@ -656,99 +738,114 @@ async function uploadComposerImage(
   }
 
   console.log(
-    'File successfully attached to browser input.'
+    'Image successfully attached to file input.'
   );
 
   /*
-   * Chờ Facebook render preview.
+   * Verify Facebook preview.
    */
   console.log(
     'Waiting for Facebook image preview...'
   );
 
-  const deadline =
-    Date.now() + 30_000;
+  const previewDeadline =
+    Date.now() + 60_000;
 
   while (
-    Date.now() < deadline
+    Date.now() <
+    previewDeadline
   ) {
-    const images =
+    const previewCandidates = [
+      composerDialog.locator(
+        'img[src^="blob:"]'
+      ),
+
+      composerDialog.locator(
+        'img[src*="fbcdn.net"]'
+      ),
+
+      composerDialog.locator(
+        '[role="img"][style*="background-image"]'
+      ),
+
       composerDialog.locator(
         'img'
-      );
-
-    const imageCount =
-      await images.count();
-
-    console.log(
-      `Visible image candidates: ${imageCount}`
-    );
+      )
+    ];
 
     for (
-      let index = 0;
-      index < imageCount;
-      index += 1
+      const candidate
+      of previewCandidates
     ) {
-      const image =
-        images.nth(index);
+      const count =
+        await candidate.count();
 
-      const visible =
-        await image
-          .isVisible()
-          .catch(() => false);
+      for (
+        let index = 0;
+        index < count;
+        index += 1
+      ) {
+        const preview =
+          candidate.nth(index);
 
-      if (!visible) {
-        continue;
-      }
+        const visible =
+          await preview
+            .isVisible()
+            .catch(() => false);
 
-      const info =
-        await image.evaluate(
-          (element) => {
-            const rect =
-              element.getBoundingClientRect();
+        if (!visible) {
+          continue;
+        }
 
-            return {
-              src:
-                element.getAttribute('src') || '',
+        const info =
+          await preview.evaluate(
+            (element) => {
+              const rect =
+                element
+                  .getBoundingClientRect();
 
-              width:
-                rect.width,
+              return {
+                tag:
+                  element.tagName,
 
-              height:
-                rect.height,
+                src:
+                  element.getAttribute(
+                    'src'
+                  ) || '',
 
-              alt:
-                element.getAttribute('alt') || ''
-            };
-          }
+                width:
+                  rect.width,
+
+                height:
+                  rect.height,
+
+                alt:
+                  element.getAttribute(
+                    'alt'
+                  ) || ''
+              };
+            }
+          ).catch(() => null);
+
+        if (!info) {
+          continue;
+        }
+
+        /*
+         * Bỏ avatar/icon nhỏ.
+         */
+        if (
+          info.width < 120 ||
+          info.height < 120
+        ) {
+          continue;
+        }
+
+        console.log(
+          'Image preview candidate:',
+          info
         );
 
-      /*
-       * Loại avatar/icon nhỏ.
-       */
-      if (
-        info.width < 100 ||
-        info.height < 100
-      ) {
-        continue;
-      }
-
-      console.log(
-        'Possible image preview:',
-        info
-      );
-
-      /*
-       * Preview Facebook thường là blob hoặc fbcdn.
-       */
-      if (
-        info.src.startsWith('blob:') ||
-        info.src.includes('fbcdn.net') ||
-        (
-          info.width >= 200 &&
-          info.height >= 200
-        )
-      ) {
         console.log(
           'Image preview detected successfully.'
         );
@@ -764,18 +861,17 @@ async function uploadComposerImage(
 
   throw new Error(
     [
-      'The image file is attached to the input,',
-      'but Facebook did not render an image preview.',
+      'The file is attached to Facebook input,',
+      'but image preview could not be verified.',
       '',
-      'The Post button has not been clicked.',
-      'Inspect the composer manually.'
+      'The Post button has not been clicked.'
     ].join('\n')
   );
 }
 
 
 /* =========================================================
- * INPUT VALIDATION
+ * VALIDATION
  * ========================================================= */
 
 function validateStt(stt) {
@@ -817,8 +913,8 @@ function resolveNumericGroupNumber(
         'Group number must be a positive integer or "next".',
         '',
         'Examples:',
-        'node src/prepare-post.js 1 1',
-        'node src/prepare-post.js 1 next'
+        'node src/prepare-post.js 2 1',
+        'node src/prepare-post.js 2 next'
       ].join('\n')
     );
   }
@@ -851,9 +947,7 @@ async function resolveTargetGroup(
   groups
 ) {
   if (
-    String(
-      groupSelection
-    )
+    String(groupSelection)
       .trim()
       .toLowerCase() !==
     'next'
@@ -933,20 +1027,12 @@ async function publishFacebookPost(
   composerDialog
 ) {
   console.log('');
-  console.log(
-    '=============================='
-  );
+  console.log('==============================');
+  console.log('STEP 3: PUBLISH');
+  console.log('==============================');
 
   console.log(
-    'STEP 3: PUBLISH'
-  );
-
-  console.log(
-    '=============================='
-  );
-
-  console.log(
-    'Searching for the Facebook Post button...'
+    'Searching for Facebook Post button...'
   );
 
   const postButtonCandidates = [
@@ -1031,8 +1117,7 @@ async function publishFacebookPost(
                   ),
 
                 nativeDisabled:
-                  'disabled'
-                  in element
+                  'disabled' in element
                     ? Boolean(
                         element.disabled
                       )
@@ -1042,25 +1127,20 @@ async function publishFacebookPost(
                   rect.width,
 
                 height:
-                  rect.height,
-
-                text:
-                  element.textContent
-                    ?.trim()
+                  rect.height
               };
             }
           );
 
-        const enabled =
+        if (
           state
             .ariaDisabled !==
             'true' &&
           !state
             .nativeDisabled &&
           state.width > 0 &&
-          state.height > 0;
-
-        if (enabled) {
+          state.height > 0
+        ) {
           postButton =
             button;
 
@@ -1074,10 +1154,6 @@ async function publishFacebookPost(
     }
 
     if (!postButton) {
-      console.log(
-        'Post button is not ready yet. Waiting...'
-      );
-
       await page.waitForTimeout(
         1000
       );
@@ -1089,7 +1165,6 @@ async function publishFacebookPost(
       [
         'Could not find an enabled Facebook Post button.',
         '',
-        'The composer is still open.',
         'The post was not published.'
       ].join('\n')
     );
@@ -1138,42 +1213,16 @@ async function publishFacebookPost(
         /pending approval|awaiting approval|chờ phê duyệt|đang chờ duyệt|quản trị viên phê duyệt/i
       );
 
-    const pendingVisible =
+    if (
       await pendingApproval
         .first()
         .isVisible()
-        .catch(() => false);
-
-    if (pendingVisible) {
-      console.log(
-        'Post submitted and is waiting for group approval.'
-      );
-
+        .catch(() => false)
+    ) {
       return {
         status:
           'pending_approval'
       };
-    }
-
-    const errorMessage =
-      page.getByText(
-        /couldn't post|unable to post|something went wrong|không thể đăng|đã xảy ra lỗi|thử lại/i
-      );
-
-    const errorVisible =
-      await errorMessage
-        .first()
-        .isVisible()
-        .catch(() => false);
-
-    if (errorVisible) {
-      throw new Error(
-        [
-          'Facebook displayed an error after clicking Post.',
-          '',
-          'Progress has not been updated.'
-        ].join('\n')
-      );
     }
 
     await page.waitForTimeout(
@@ -1185,15 +1234,14 @@ async function publishFacebookPost(
     [
       'The Post button was clicked, but submission could not be verified.',
       '',
-      'Progress has not been updated.',
-      'Inspect Facebook manually before retrying.'
+      'Progress has not been updated.'
     ].join('\n')
   );
 }
 
 
 /* =========================================================
- * PREPARE ONE GROUP
+ * PREPARE GROUP POST
  * ========================================================= */
 
 export async function prepareGroupPost(
@@ -1201,9 +1249,7 @@ export async function prepareGroupPost(
   groupSelection = 'next'
 ) {
   const numericStt =
-    validateStt(
-      stt
-    );
+    validateStt(stt);
 
   console.log(
     `Loading post data for STT ${numericStt}...`
@@ -1222,16 +1268,6 @@ export async function prepareGroupPost(
     await getPostGroupsByStt(
       numericStt
     );
-
-  if (
-    groupResult
-      .groups
-      .length === 0
-  ) {
-    throw new Error(
-      `Post STT ${numericStt} has no enabled groups.`
-    );
-  }
 
   const {
     groupNumber,
@@ -1273,22 +1309,12 @@ export async function prepareGroupPost(
   } =
     composerSession;
 
-
-  /* =======================================================
-   * TEXT
-   * ======================================================= */
-
   await insertComposerContent(
     page,
     composerDialog,
     composerEditor,
     preparedPost.jd
   );
-
-
-  /* =======================================================
-   * IMAGE
-   * ======================================================= */
 
   await uploadComposerImage(
     page,
@@ -1298,21 +1324,11 @@ export async function prepareGroupPost(
       .absolutePath
   );
 
-
-  /* =======================================================
-   * PUBLISH
-   * ======================================================= */
-
   const publishResult =
     await publishFacebookPost(
       page,
       composerDialog
     );
-
-
-  /* =======================================================
-   * PROGRESS
-   * ======================================================= */
 
   const updatedProgress =
     await markGroupPrepared({
@@ -1342,10 +1358,6 @@ export async function prepareGroupPost(
   await composerSession
     .context
     .close();
-
-  console.log(
-    'Facebook Chrome closed.'
-  );
 
   return {
     preparedPost,
@@ -1380,18 +1392,10 @@ async function run() {
 
   if (!stt) {
     console.error(
-      [
-        'Usage:',
-        'node src/prepare-post.js <stt> [group-number|next]',
-        '',
-        'Examples:',
-        'node src/prepare-post.js 2 1',
-        'node src/prepare-post.js 2 next'
-      ].join('\n')
+      'Usage: node src/prepare-post.js <stt> [group-number|next]'
     );
 
     process.exitCode = 1;
-
     return;
   }
 
@@ -1450,10 +1454,6 @@ async function run() {
   }
 }
 
-
-/* =========================================================
- * DIRECT EXECUTION
- * ========================================================= */
 
 const isDirectExecution =
   process.argv[1] &&
