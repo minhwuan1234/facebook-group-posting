@@ -18,5 +18,11 @@
       "image": "assets/positions/project-manager.jpg",
       "enabled": true
     }
+    {
+  "id": "hr-intern",
+  "name": "HR Intern",
+  "image": "assets/positions/hr-intern.png",
+  "enabled": true
+}
   ]
 }
