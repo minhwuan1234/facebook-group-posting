@@ -23,13 +23,15 @@ const DELAY_BETWEEN_GROUPS_MS = 5000;
  * ========================================================= */
 
 const currentFilePath =
-  fileURLToPath(
-    import.meta.url
-  );
+  fileURLToPath(import.meta.url);
 
 const currentDirectory =
-  path.dirname(
-    currentFilePath
+  path.dirname(currentFilePath);
+
+const projectRoot =
+  path.resolve(
+    currentDirectory,
+    '..'
   );
 
 const preparePostPath =
@@ -48,9 +50,7 @@ function validateStt(stt) {
     Number(stt);
 
   if (
-    !Number.isInteger(
-      numericStt
-    ) ||
+    !Number.isInteger(numericStt) ||
     numericStt <= 0
   ) {
     throw new Error(
@@ -63,7 +63,7 @@ function validateStt(stt) {
 
 
 /* =========================================================
- * WAIT
+ * WAIT HELPER
  * ========================================================= */
 
 function wait(milliseconds) {
@@ -91,10 +91,43 @@ async function waitBeforeNextGroup() {
 
 
 /* =========================================================
- * RUN ONE GROUP
+ * PROGRESS
  * ========================================================= */
 
-async function runPreparePost(
+async function loadCompletedGroupKeys(
+  stt
+) {
+  const progress =
+    await getPostProgress(stt);
+
+  const preparedGroupKeys =
+    Array.isArray(
+      progress?.preparedGroupKeys
+    )
+      ? progress.preparedGroupKeys
+      : [];
+
+  return new Set(
+    preparedGroupKeys
+  );
+}
+
+
+/* =========================================================
+ * RUN ONE GROUP
+ *
+ * IMPORTANT:
+ *
+ * Không import prepareGroupPost().
+ *
+ * Chạy đúng CLI đã hoạt động:
+ *
+ * node src/prepare-post.js <stt> <group-number>
+ *
+ * Vì vậy prepare-post.js không cần export function.
+ * ========================================================= */
+
+async function runSingleGroup(
   stt,
   groupNumber
 ) {
@@ -102,7 +135,7 @@ async function runPreparePost(
     (resolve) => {
       console.log('');
       console.log(
-        `Running prepare-post.js for group ${groupNumber}...`
+        `Starting prepare-post.js for group ${groupNumber}...`
       );
 
       const child =
@@ -115,46 +148,84 @@ async function runPreparePost(
           ],
           {
             cwd:
-              path.resolve(
-                currentDirectory,
-                '..'
-              ),
+              projectRoot,
 
             stdio:
               'inherit',
 
             env:
-              process.env
+              {
+                ...process.env,
+
+                /*
+                 * Batch thật.
+                 *
+                 * Đảm bảo TEST_MODE cũ
+                 * không vô tình ngăn nút Post.
+                 */
+                TEST_MODE:
+                  '0'
+              }
           }
         );
 
-      child.on(
+
+      /* -----------------------------------------------------
+       * CHILD PROCESS FAILED TO START
+       * ----------------------------------------------------- */
+
+      child.once(
         'error',
         (error) => {
           resolve({
-            success: false,
-            exitCode: null,
+            success:
+              false,
+
+            exitCode:
+              null,
+
+            signal:
+              null,
+
             error:
-              error.message
+              `Could not start prepare-post.js: ${error.message}`
           });
         }
       );
 
-      child.on(
+
+      /* -----------------------------------------------------
+       * CHILD PROCESS FINISHED
+       * ----------------------------------------------------- */
+
+      child.once(
         'close',
-        (code, signal) => {
+        (
+          code,
+          signal
+        ) => {
           if (code === 0) {
             resolve({
-              success: true,
-              exitCode: 0,
-              signal: null
+              success:
+                true,
+
+              exitCode:
+                0,
+
+              signal:
+                null,
+
+              error:
+                null
             });
 
             return;
           }
 
           resolve({
-            success: false,
+            success:
+              false,
+
             exitCode:
               code,
 
@@ -163,34 +234,12 @@ async function runPreparePost(
 
             error:
               signal
-                ? `Process stopped by signal ${signal}.`
+                ? `prepare-post.js stopped by signal ${signal}.`
                 : `prepare-post.js exited with code ${code}.`
           });
         }
       );
     }
-  );
-}
-
-
-/* =========================================================
- * LOAD CURRENT COMPLETED GROUPS
- * ========================================================= */
-
-async function getCompletedGroupKeys(
-  stt
-) {
-  const progress =
-    await getPostProgress(
-      stt
-    );
-
-  return new Set(
-    Array.isArray(
-      progress?.preparedGroupKeys
-    )
-      ? progress.preparedGroupKeys
-      : []
   );
 }
 
@@ -203,9 +252,12 @@ export async function prepareAllGroups(
   stt
 ) {
   const numericStt =
-    validateStt(
-      stt
-    );
+    validateStt(stt);
+
+
+  /* =======================================================
+   * HEADER
+   * ======================================================= */
 
   console.log('');
   console.log(
@@ -213,7 +265,7 @@ export async function prepareAllGroups(
   );
 
   console.log(
-    `FACEBOOK BATCH — STT ${numericStt}`
+    `FACEBOOK BATCH START — STT ${numericStt}`
   );
 
   console.log(
@@ -225,16 +277,25 @@ export async function prepareAllGroups(
    * LOAD GROUPS
    * ======================================================= */
 
+  console.log('');
+  console.log(
+    'Loading Facebook Groups...'
+  );
+
   const groupResult =
     await getPostGroupsByStt(
       numericStt
     );
 
   const groups =
-    groupResult.groups;
+    Array.isArray(
+      groupResult?.groups
+    )
+      ? groupResult.groups
+      : [];
+
 
   if (
-    !Array.isArray(groups) ||
     groups.length === 0
   ) {
     throw new Error(
@@ -244,17 +305,18 @@ export async function prepareAllGroups(
 
 
   /* =======================================================
-   * LOAD PROGRESS
+   * LOAD EXISTING PROGRESS
    * ======================================================= */
 
   const completedGroupKeys =
-    await getCompletedGroupKeys(
+    await loadCompletedGroupKeys(
       numericStt
     );
 
+
   console.log('');
   console.log(
-    `Total groups: ${groups.length}`
+    `Total assigned groups: ${groups.length}`
   );
 
   console.log(
@@ -263,52 +325,83 @@ export async function prepareAllGroups(
 
 
   /* =======================================================
-   * BUILD REMAINING LIST
+   * BUILD GROUP QUEUE
+   *
+   * Giữ original group number.
+   *
+   * Ví dụ:
+   *
+   * hr-group-01 → 1
+   * hr-group-04 → 4
+   * hr-group-12 → 12
    * ======================================================= */
 
-  const remainingGroups =
+  const groupQueue =
     groups
       .map(
         (
           group,
           index
-        ) => ({
-          group,
-
-          /*
-           * Number trong full group list.
-           */
-          groupNumber:
-            index + 1
-        })
+        ) => {
+          return {
+            group,
+            groupNumber:
+              index + 1
+          };
+        }
       )
       .filter(
         ({
           group
-        }) =>
-          !completedGroupKeys.has(
+        }) => {
+          return !completedGroupKeys.has(
             group.groupKey
-          )
+          );
+        }
       );
 
+
   console.log(
-    `Remaining groups: ${remainingGroups.length}`
+    `Remaining groups: ${groupQueue.length}`
   );
 
+
+  /* =======================================================
+   * NOTHING LEFT
+   * ======================================================= */
+
   if (
-    remainingGroups.length === 0
+    groupQueue.length === 0
   ) {
     console.log('');
     console.log(
-      'Nothing to do. All groups are already completed.'
+      'All Facebook Groups have already been completed.'
     );
 
-    return;
+    return {
+      stt:
+        numericStt,
+
+      totalGroups:
+        groups.length,
+
+      successfulThisRun:
+        0,
+
+      failedThisRun:
+        0,
+
+      skippedCompleted:
+        groups.length,
+
+      failedGroups:
+        []
+    };
   }
 
 
   /* =======================================================
-   * RESULTS
+   * BATCH RESULT
    * ======================================================= */
 
   const successfulGroups = [];
@@ -316,19 +409,22 @@ export async function prepareAllGroups(
 
 
   /* =======================================================
-   * LOOP
+   * MAIN LOOP
    * ======================================================= */
 
   for (
-    let index = 0;
-    index < remainingGroups.length;
-    index += 1
+    let queueIndex = 0;
+    queueIndex < groupQueue.length;
+    queueIndex += 1
   ) {
     const {
       group,
       groupNumber
     } =
-      remainingGroups[index];
+      groupQueue[
+        queueIndex
+      ];
+
 
     console.log('');
     console.log(
@@ -336,7 +432,7 @@ export async function prepareAllGroups(
     );
 
     console.log(
-      `BATCH ${index + 1}/${remainingGroups.length}`
+      `BATCH ITEM ${queueIndex + 1}/${groupQueue.length}`
     );
 
     console.log(
@@ -344,11 +440,11 @@ export async function prepareAllGroups(
     );
 
     console.log(
-      `KEY: ${group.groupKey}`
+      `Group key: ${group.groupKey}`
     );
 
     console.log(
-      `NAME: ${group.name}`
+      `Group name: ${group.name}`
     );
 
     console.log(
@@ -361,21 +457,47 @@ export async function prepareAllGroups(
 
 
     /* =====================================================
-     * RUN GROUP
+     * RUN CURRENT GROUP
      * ===================================================== */
 
-    const result =
-      await runPreparePost(
-        numericStt,
-        groupNumber
-      );
+    let result;
+
+    try {
+      result =
+        await runSingleGroup(
+          numericStt,
+          groupNumber
+        );
+    } catch (error) {
+      /*
+       * Safety fallback.
+       *
+       * Một exception ở batch controller
+       * cũng không được kill toàn batch.
+       */
+      result = {
+        success:
+          false,
+
+        exitCode:
+          null,
+
+        signal:
+          null,
+
+        error:
+          error.message
+      };
+    }
 
 
     /* =====================================================
      * SUCCESS
      * ===================================================== */
 
-    if (result.success) {
+    if (
+      result.success
+    ) {
       successfulGroups.push({
         groupNumber,
         groupKey:
@@ -386,35 +508,60 @@ export async function prepareAllGroups(
           group.url
       });
 
+
       console.log('');
       console.log(
         `SUCCESS: ${group.groupKey}`
+      );
+
+      console.log(
+        `Completed overall group ${groupNumber}/${groups.length}.`
       );
     }
 
 
     /* =====================================================
      * FAILURE
+     *
+     * QUAN TRỌNG:
+     *
+     * Không throw.
+     * Không stop batch.
+     * Không mark completed.
+     * Sang group tiếp theo.
      * ===================================================== */
 
     else {
       failedGroups.push({
         groupNumber,
+
         groupKey:
           group.groupKey,
+
         name:
           group.name,
+
         url:
           group.url,
+
         exitCode:
           result.exitCode,
+
+        signal:
+          result.signal,
+
         error:
           result.error
       });
 
+
       console.error('');
       console.error(
         `FAILED: ${group.groupKey}`
+      );
+
+      console.error(
+        `Overall group: ${groupNumber}/${groups.length}`
       );
 
       console.error(
@@ -431,7 +578,7 @@ export async function prepareAllGroups(
 
       console.error('');
       console.error(
-        'This group will NOT be marked completed.'
+        'This group was NOT marked completed.'
       );
 
       console.error(
@@ -441,12 +588,15 @@ export async function prepareAllGroups(
 
 
     /* =====================================================
-     * WAIT BEFORE NEXT
+     * WAIT BEFORE NEXT GROUP
      * ===================================================== */
 
+    const hasNextGroup =
+      queueIndex <
+      groupQueue.length - 1;
+
     if (
-      index <
-      remainingGroups.length - 1
+      hasNextGroup
     ) {
       await waitBeforeNextGroup();
     }
@@ -454,11 +604,11 @@ export async function prepareAllGroups(
 
 
   /* =======================================================
-   * FINAL PROGRESS
+   * RELOAD FINAL PROGRESS
    * ======================================================= */
 
-  const finalCompletedKeys =
-    await getCompletedGroupKeys(
+  const finalCompletedGroupKeys =
+    await loadCompletedGroupKeys(
       numericStt
     );
 
@@ -485,7 +635,7 @@ export async function prepareAllGroups(
   );
 
   console.log(
-    `Total groups: ${groups.length}`
+    `Total assigned groups: ${groups.length}`
   );
 
   console.log(
@@ -497,8 +647,37 @@ export async function prepareAllGroups(
   );
 
   console.log(
-    `Total completed: ${finalCompletedKeys.size}/${groups.length}`
+    `Total completed: ${finalCompletedGroupKeys.size}/${groups.length}`
   );
+
+
+  /* =======================================================
+   * SUCCESS SUMMARY
+   * ======================================================= */
+
+  if (
+    successfulGroups.length > 0
+  ) {
+    console.log('');
+    console.log(
+      'SUCCESSFUL GROUPS'
+    );
+
+    console.log(
+      '----------------------------------------'
+    );
+
+    successfulGroups.forEach(
+      (
+        item,
+        index
+      ) => {
+        console.log(
+          `${index + 1}. ${item.groupKey} — overall ${item.groupNumber}/${groups.length}`
+        );
+      }
+    );
+  }
 
 
   /* =======================================================
@@ -519,38 +698,52 @@ export async function prepareAllGroups(
 
     failedGroups.forEach(
       (
-        failed,
+        item,
         index
       ) => {
         console.log('');
 
         console.log(
-          `${index + 1}. ${failed.groupKey}`
+          `${index + 1}. ${item.groupKey}`
         );
 
         console.log(
-          `   Overall group: ${failed.groupNumber}/${groups.length}`
+          `   Overall group: ${item.groupNumber}/${groups.length}`
         );
 
         console.log(
-          `   Name: ${failed.name}`
+          `   Name: ${item.name}`
         );
 
         console.log(
-          `   URL: ${failed.url}`
+          `   URL: ${item.url}`
         );
 
         console.log(
-          `   Error: ${failed.error}`
+          `   Exit code: ${item.exitCode ?? 'N/A'}`
+        );
+
+        console.log(
+          `   Error: ${item.error}`
         );
       }
     );
 
+
     console.log('');
     console.log(
-      'Failed groups remain incomplete and can be retried later.'
+      'Failed groups remain incomplete.'
+    );
+
+    console.log(
+      'Run prepare-all.js again later to retry them.'
     );
   }
+
+
+  /* =======================================================
+   * RETURN
+   * ======================================================= */
 
   return {
     stt:
@@ -559,12 +752,18 @@ export async function prepareAllGroups(
     totalGroups:
       groups.length,
 
+    successfulThisRun:
+      successfulGroups.length,
+
+    failedThisRun:
+      failedGroups.length,
+
+    totalCompleted:
+      finalCompletedGroupKeys.size,
+
     successfulGroups,
 
-    failedGroups,
-
-    completed:
-      finalCompletedKeys.size
+    failedGroups
   };
 }
 
@@ -576,6 +775,7 @@ export async function prepareAllGroups(
 async function run() {
   const stt =
     process.argv[2];
+
 
   if (!stt) {
     console.error(
@@ -594,6 +794,7 @@ async function run() {
 
     return;
   }
+
 
   try {
     await prepareAllGroups(
@@ -618,17 +819,17 @@ async function run() {
  * DIRECT EXECUTION
  * ========================================================= */
 
-const isDirectExecution =
-  process.argv[1] &&
-  import.meta.url ===
-    pathToFileURL(
-      path.resolve(
+const executedFilePath =
+  process.argv[1]
+    ? path.resolve(
         process.argv[1]
       )
-    ).href;
+    : null;
+
 
 if (
-  isDirectExecution
+  executedFilePath ===
+  currentFilePath
 ) {
   await run();
 }
