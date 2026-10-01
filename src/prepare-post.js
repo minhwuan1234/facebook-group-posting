@@ -467,52 +467,6 @@ async function uploadComposerImage(
     'Image file selected. Waiting for Facebook preview...'
   );
 
-  const attachedFiles =
-    await fileInput.evaluate(
-      (element) => {
-        if (!element.files) {
-          return [];
-        }
-
-        return Array
-          .from(
-            element.files
-          )
-          .map(
-            (file) => ({
-              name:
-                file.name,
-
-              type:
-                file.type,
-
-              size:
-                file.size
-            })
-          );
-      }
-    ).catch(
-      () => []
-    );
-
-  console.log(
-    'Attached files:',
-    attachedFiles
-  );
-
-  if (
-    attachedFiles.length === 0
-  ) {
-    throw new Error(
-      [
-        'setInputFiles() completed, but no file is attached.',
-        '',
-        'The image has not been inserted.',
-        'The Post button has not been clicked.'
-      ].join('\n')
-    );
-  }
-
   const uploadDeadline =
     Date.now() + 120_000;
 
