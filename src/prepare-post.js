@@ -267,10 +267,6 @@ async function insertComposerContent(
     300
   );
 
-  /*
-   * Paste nguyên content từ Supabase
-   * trong một lần.
-   */
   console.log(
     'Pasting raw JD from Supabase...'
   );
@@ -287,9 +283,6 @@ async function insertComposerContent(
     1500
   );
 
-  /*
-   * Verify content.
-   */
   const deadline =
     Date.now() + 10_000;
 
@@ -344,11 +337,6 @@ async function insertComposerContent(
 
 /* =========================================================
  * IMAGE UPLOAD
- *
- * OLD WORKING FLOW
- *
- * Không click "Ảnh/video".
- * Tìm thẳng input[type="file"].
  * ========================================================= */
 
 async function uploadComposerImage(
@@ -576,8 +564,8 @@ function resolveNumericGroupNumber(
         'Group number must be a positive integer or "next".',
         '',
         'Examples:',
-        'node src/prepare-post.js 2 1',
-        'node src/prepare-post.js 2 next'
+        'node src/prepare-post.js 3 1',
+        'node src/prepare-post.js 3 next'
       ].join('\n')
     );
   }
@@ -877,6 +865,13 @@ async function publishFacebookPost(
     timeout: 15_000
   });
 
+  /*
+   * Cho Facebook bắt đầu xử lý request.
+   */
+  await page.waitForTimeout(
+    1500
+  );
+
   const publishDeadline =
     Date.now() + 90_000;
 
@@ -892,6 +887,23 @@ async function publishFacebookPost(
     if (!dialogVisible) {
       console.log(
         'Composer closed after publishing.'
+      );
+
+      /*
+       * QUAN TRỌNG:
+       * Không đóng browser ngay khi composer vừa biến mất.
+       * Chờ Facebook/server hoàn tất xử lý thêm 5 giây.
+       */
+      console.log(
+        'Waiting 5 seconds for Facebook server response...'
+      );
+
+      await page.waitForTimeout(
+        5000
+      );
+
+      console.log(
+        'Post submission wait completed.'
       );
 
       return {
@@ -913,6 +925,23 @@ async function publishFacebookPost(
     ) {
       console.log(
         'Post submitted and is waiting for group approval.'
+      );
+
+      /*
+       * Pending approval cũng chứng minh Facebook
+       * đã nhận submission, nhưng vẫn chờ thêm 5 giây
+       * trước khi đóng browser.
+       */
+      console.log(
+        'Waiting 5 seconds for Facebook server response...'
+      );
+
+      await page.waitForTimeout(
+        5000
+      );
+
+      console.log(
+        'Post submission wait completed.'
       );
 
       return {
@@ -1064,21 +1093,47 @@ export async function prepareGroupPost(
       .absolutePath
   );
 
-  if (process.env.TEST_MODE === '1') {
-  console.log('');
-  console.log('TEST MODE');
-  console.log('Content and image are prepared.');
-  console.log('The Post button has NOT been clicked.');
-  console.log('Inspect the Facebook composer manually.');
 
-  return {
-    preparedPost,
-    targetGroup,
-    groupNumber,
-    totalGroups: groupResult.groups.length,
-    testMode: true
-  };
-}
+  /* =======================================================
+   * TEST MODE
+   * ======================================================= */
+
+  if (
+    process.env.TEST_MODE === '1'
+  ) {
+    console.log('');
+    console.log(
+      'TEST MODE'
+    );
+
+    console.log(
+      'Content and image are prepared.'
+    );
+
+    console.log(
+      'The Post button has NOT been clicked.'
+    );
+
+    console.log(
+      'Inspect the Facebook composer manually.'
+    );
+
+    return {
+      preparedPost,
+      targetGroup,
+      groupNumber,
+
+      totalGroups:
+        groupResult
+          .groups
+          .length,
+
+      testMode:
+        true
+    };
+  }
+
+
   /* =======================================================
    * PUBLISH
    * ======================================================= */
@@ -1120,6 +1175,14 @@ export async function prepareGroupPost(
     `Prepared groups: ${updatedProgress.preparedGroupKeys.length}/${groupResult.groups.length}`
   );
 
+  /*
+   * Chỉ đóng browser SAU KHI:
+   *
+   * 1. click Post
+   * 2. Facebook xác nhận submission
+   * 3. đã chờ thêm 5 giây
+   * 4. progress được lưu
+   */
   await composerSession
     .context
     .close();
@@ -1166,8 +1229,8 @@ async function run() {
         'node src/prepare-post.js <stt> [group-number|next]',
         '',
         'Examples:',
-        'node src/prepare-post.js 2 1',
-        'node src/prepare-post.js 2 next'
+        'node src/prepare-post.js 3 1',
+        'node src/prepare-post.js 3 next'
       ].join('\n')
     );
 
