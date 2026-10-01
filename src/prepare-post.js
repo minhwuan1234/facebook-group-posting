@@ -1,524 +1,42 @@
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
-
-import {
-  getPreparedPostData
-} from './post-data.js';
+import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
 
 import {
   getPostGroupsByStt
 } from './post-groups.js';
 
 import {
-  openFacebookComposer
-} from './open-composer.js';
-
-import {
-  acquireJobLock,
-  releaseJobLock
-} from './job-lock.js';
-
-import {
-  getPostProgress,
-  markGroupPrepared
+  getPostProgress
 } from './post-progress.js';
 
 
 /* =========================================================
- * CONTENT HELPERS
+ * CONFIG
  * ========================================================= */
 
-function normaliseContent(value) {
-  return String(value ?? '')
-    .replace(/\r\n/g, '\n')
-    .replace(/\u00a0/g, ' ')
-    .replace(/\u200b/g, '')
-    .trim();
-}
-
-
-async function readElementContent(
-  element
-) {
-  return element.evaluate(
-    (node) => {
-      if (
-        node.tagName === 'TEXTAREA' ||
-        node.tagName === 'INPUT'
-      ) {
-        return node.value || '';
-      }
-
-      return (
-        node.innerText ||
-        node.textContent ||
-        ''
-      );
-    }
-  );
-}
-
-
-async function readComposerContent(
-  composerDialog,
-  composerEditor
-) {
-  const selectedEditorText =
-    await readElementContent(
-      composerEditor
-    ).catch(() => '');
-
-  if (
-    normaliseContent(
-      selectedEditorText
-    )
-  ) {
-    return selectedEditorText;
-  }
-
-  const candidates = [
-    composerDialog.locator(
-      '[contenteditable="true"][role="textbox"]'
-    ),
-
-    composerDialog.locator(
-      '[role="textbox"][contenteditable="true"]'
-    ),
-
-    composerDialog.locator(
-      '[contenteditable="true"]'
-    ),
-
-    composerDialog.locator(
-      'textarea'
-    )
-  ];
-
-  for (
-    const candidate
-    of candidates
-  ) {
-    const count =
-      await candidate.count();
-
-    for (
-      let index = 0;
-      index < count;
-      index += 1
-    ) {
-      const item =
-        candidate.nth(index);
-
-      const visible =
-        await item
-          .isVisible()
-          .catch(() => false);
-
-      if (!visible) {
-        continue;
-      }
-
-      const text =
-        await readElementContent(
-          item
-        ).catch(() => '');
-
-      if (
-        normaliseContent(text)
-      ) {
-        return text;
-      }
-    }
-  }
-
-  return '';
-}
+const DELAY_BETWEEN_GROUPS_MS = 5000;
 
 
 /* =========================================================
- * INSERT JD CONTENT
+ * PATHS
  * ========================================================= */
 
-async function insertComposerContent(
-  page,
-  composerDialog,
-  composerEditor,
-  content
-) {
-  console.log('');
-  console.log(
-    '=============================='
+const currentFilePath =
+  fileURLToPath(
+    import.meta.url
   );
 
-  console.log(
-    'STEP 1: INSERT JD CONTENT'
+const currentDirectory =
+  path.dirname(
+    currentFilePath
   );
 
-  console.log(
-    '=============================='
+const preparePostPath =
+  path.join(
+    currentDirectory,
+    'prepare-post.js'
   );
-
-  /*
-   * Lấy nguyên JD từ Supabase.
-   * Không map.
-   * Không thêm dấu "-".
-   * Không tự format lại.
-   */
-  const text =
-    String(content ?? '');
-
-  if (!text.trim()) {
-    throw new Error(
-      'JD content is empty.'
-    );
-  }
-
-  const expectedContent =
-    normaliseContent(
-      text
-    );
-
-  console.log(
-    `Expected JD length: ${expectedContent.length}`
-  );
-
-  await composerEditor.waitFor({
-    state: 'visible',
-    timeout: 15_000
-  });
-
-  await composerEditor
-    .scrollIntoViewIfNeeded();
-
-  console.log(
-    'Clicking composer editor...'
-  );
-
-  await composerEditor.click({
-    timeout: 15_000
-  });
-
-  console.log(
-    'Focusing composer editor...'
-  );
-
-  await composerEditor.evaluate(
-    (element) => {
-      element.focus();
-    }
-  );
-
-  await page.waitForTimeout(
-    300
-  );
-
-  const activeElementInfo =
-    await page.evaluate(
-      () => {
-        const element =
-          document.activeElement;
-
-        if (!element) {
-          return null;
-        }
-
-        return {
-          tag:
-            element.tagName,
-
-          role:
-            element.getAttribute(
-              'role'
-            ),
-
-          contenteditable:
-            element.getAttribute(
-              'contenteditable'
-            ),
-
-          ariaLabel:
-            element.getAttribute(
-              'aria-label'
-            )
-        };
-      }
-    );
-
-  console.log(
-    'Active element:',
-    activeElementInfo
-  );
-
-  console.log(
-    'Clearing existing composer content...'
-  );
-
-  await page.keyboard.press(
-    process.platform === 'darwin'
-      ? 'Meta+A'
-      : 'Control+A'
-  );
-
-  await page.keyboard.press(
-    'Backspace'
-  );
-
-  await page.waitForTimeout(
-    300
-  );
-
-  console.log(
-    'Pasting raw JD from Supabase...'
-  );
-
-  await page.keyboard.insertText(
-    text
-  );
-
-  console.log(
-    'JD pasted successfully.'
-  );
-
-  await page.waitForTimeout(
-    1500
-  );
-
-  const deadline =
-    Date.now() + 10_000;
-
-  let actualContent = '';
-
-  while (
-    Date.now() < deadline
-  ) {
-    const insertedContent =
-      await readComposerContent(
-        composerDialog,
-        composerEditor
-      );
-
-    actualContent =
-      normaliseContent(
-        insertedContent
-      );
-
-    console.log(
-      `Current composer length: ${actualContent.length}`
-    );
-
-    if (
-      actualContent ===
-      expectedContent
-    ) {
-      console.log(
-        'JD content verified successfully.'
-      );
-
-      return;
-    }
-
-    await page.waitForTimeout(
-      500
-    );
-  }
-
-  throw new Error(
-    [
-      'JD content insertion verification failed.',
-      '',
-      `Expected length: ${expectedContent.length}`,
-      `Actual length: ${actualContent.length}`,
-      '',
-      'The Post button has not been clicked.'
-    ].join('\n')
-  );
-}
-
-
-/* =========================================================
- * IMAGE UPLOAD
- * ========================================================= */
-
-async function uploadComposerImage(
-  page,
-  composerDialog,
-  imagePath
-) {
-  console.log('');
-  console.log(
-    '=============================='
-  );
-
-  console.log(
-    'STEP 2: UPLOAD IMAGE'
-  );
-
-  console.log(
-    '=============================='
-  );
-
-  console.log(
-    'Uploading image...'
-  );
-
-  console.log(
-    `Image path: ${imagePath}`
-  );
-
-  const fileInputCandidates = [
-    composerDialog.locator(
-      'input[type="file"][accept*="image"]'
-    ),
-
-    composerDialog.locator(
-      'input[type="file"]'
-    ),
-
-    page.locator(
-      '[role="dialog"] input[type="file"][accept*="image"]'
-    ),
-
-    page.locator(
-      '[role="dialog"] input[type="file"]'
-    ),
-
-    page.locator(
-      'input[type="file"][accept*="image"]'
-    )
-  ];
-
-  let fileInput = null;
-
-  for (
-    const candidate
-    of fileInputCandidates
-  ) {
-    const count =
-      await candidate.count();
-
-    if (count > 0) {
-      fileInput =
-        candidate.first();
-
-      break;
-    }
-  }
-
-  if (!fileInput) {
-    throw new Error(
-      [
-        'Could not find the Facebook image upload input.',
-        '',
-        'Inspect the open composer manually.',
-        'The Post button has not been clicked.'
-      ].join('\n')
-    );
-  }
-
-  const fileInputDebug =
-    await fileInput.evaluate(
-      (element) => ({
-        accept:
-          element.getAttribute(
-            'accept'
-          ),
-
-        multiple:
-          Boolean(
-            element.multiple
-          ),
-
-        disabled:
-          Boolean(
-            element.disabled
-          ),
-
-        html:
-          element.outerHTML
-            .slice(
-              0,
-              400
-            )
-      })
-    ).catch(() => null);
-
-  console.log(
-    'Selected image input:',
-    fileInputDebug
-  );
-
-  await fileInput.setInputFiles(
-    imagePath
-  );
-
-  console.log(
-    'Image file selected. Waiting for Facebook preview...'
-  );
-
-  const uploadDeadline =
-    Date.now() + 120_000;
-
-  while (
-    Date.now() <
-    uploadDeadline
-  ) {
-    const previewCandidates = [
-      composerDialog.locator(
-        'img[src^="blob:"]'
-      ),
-
-      composerDialog.locator(
-        'img[src*="fbcdn.net"]'
-      ),
-
-      composerDialog.locator(
-        '[role="img"][style*="background-image"]'
-      )
-    ];
-
-    for (
-      const candidate
-      of previewCandidates
-    ) {
-      const count =
-        await candidate.count();
-
-      for (
-        let index = 0;
-        index < count;
-        index += 1
-      ) {
-        const preview =
-          candidate.nth(index);
-
-        if (
-          await preview
-            .isVisible()
-            .catch(() => false)
-        ) {
-          console.log(
-            'Image preview detected successfully.'
-          );
-
-          return;
-        }
-      }
-    }
-
-    await page.waitForTimeout(
-      1000
-    );
-  }
-
-  throw new Error(
-    [
-      'The image was selected, but Facebook preview could not be verified.',
-      '',
-      'Inspect the open composer manually.',
-      'The Post button has not been clicked.'
-    ].join('\n')
-  );
-}
 
 
 /* =========================================================
@@ -544,668 +62,509 @@ function validateStt(stt) {
 }
 
 
-function resolveNumericGroupNumber(
-  groupNumber,
-  totalGroups
-) {
-  const numericGroupNumber =
-    Number(
-      groupNumber
-    );
+/* =========================================================
+ * WAIT
+ * ========================================================= */
 
-  if (
-    !Number.isInteger(
-      numericGroupNumber
-    ) ||
-    numericGroupNumber <= 0
-  ) {
-    throw new Error(
-      [
-        'Group number must be a positive integer or "next".',
-        '',
-        'Examples:',
-        'node src/prepare-post.js 3 1',
-        'node src/prepare-post.js 3 next'
-      ].join('\n')
-    );
-  }
+function wait(milliseconds) {
+  return new Promise(
+    (resolve) => {
+      setTimeout(
+        resolve,
+        milliseconds
+      );
+    }
+  );
+}
 
-  if (
-    numericGroupNumber >
-    totalGroups
-  ) {
-    throw new Error(
-      [
-        `Invalid group number: ${numericGroupNumber}.`,
-        `This post has only ${totalGroups} enabled groups.`,
-        '',
-        `Valid range: 1-${totalGroups}`
-      ].join('\n')
-    );
-  }
 
-  return numericGroupNumber;
+async function waitBeforeNextGroup() {
+  console.log('');
+  console.log(
+    'Waiting 5 seconds before the next group...'
+  );
+
+  await wait(
+    DELAY_BETWEEN_GROUPS_MS
+  );
 }
 
 
 /* =========================================================
- * TARGET GROUP
+ * RUN ONE GROUP
  * ========================================================= */
 
-async function resolveTargetGroup(
+async function runPreparePost(
   stt,
-  groupSelection,
-  groups
+  groupNumber
 ) {
-  if (
-    String(
-      groupSelection
-    )
-      .trim()
-      .toLowerCase() !==
-    'next'
-  ) {
-    const groupNumber =
-      resolveNumericGroupNumber(
-        groupSelection,
-        groups.length
+  return new Promise(
+    (resolve) => {
+      console.log('');
+      console.log(
+        `Running prepare-post.js for group ${groupNumber}...`
       );
 
-    return {
-      groupNumber,
+      const child =
+        spawn(
+          process.execPath,
+          [
+            preparePostPath,
+            String(stt),
+            String(groupNumber)
+          ],
+          {
+            cwd:
+              path.resolve(
+                currentDirectory,
+                '..'
+              ),
 
-      targetGroup:
-        groups[
-          groupNumber - 1
-        ],
+            stdio:
+              'inherit',
 
-      selectionMode:
-        'manual'
-    };
-  }
+            env:
+              process.env
+          }
+        );
 
+      child.on(
+        'error',
+        (error) => {
+          resolve({
+            success: false,
+            exitCode: null,
+            error:
+              error.message
+          });
+        }
+      );
+
+      child.on(
+        'close',
+        (code, signal) => {
+          if (code === 0) {
+            resolve({
+              success: true,
+              exitCode: 0,
+              signal: null
+            });
+
+            return;
+          }
+
+          resolve({
+            success: false,
+            exitCode:
+              code,
+
+            signal:
+              signal || null,
+
+            error:
+              signal
+                ? `Process stopped by signal ${signal}.`
+                : `prepare-post.js exited with code ${code}.`
+          });
+        }
+      );
+    }
+  );
+}
+
+
+/* =========================================================
+ * LOAD CURRENT COMPLETED GROUPS
+ * ========================================================= */
+
+async function getCompletedGroupKeys(
+  stt
+) {
   const progress =
     await getPostProgress(
       stt
     );
 
-  const preparedGroupKeys =
-    new Set(
-      progress
-        .preparedGroupKeys
-    );
-
-  const nextGroupIndex =
-    groups.findIndex(
-      (group) =>
-        !preparedGroupKeys.has(
-          group.groupKey
-        )
-    );
-
-  if (
-    nextGroupIndex === -1
-  ) {
-    throw new Error(
-      [
-        `All ${groups.length} assigned groups have already been prepared for STT ${stt}.`,
-        '',
-        'Reset progress before starting again:',
-        `node src/post-progress.js reset ${stt}`
-      ].join('\n')
-    );
-  }
-
-  return {
-    groupNumber:
-      nextGroupIndex + 1,
-
-    targetGroup:
-      groups[
-        nextGroupIndex
-      ],
-
-    selectionMode:
-      'next'
-  };
-}
-
-
-/* =========================================================
- * PUBLISH
- * ========================================================= */
-
-async function publishFacebookPost(
-  page,
-  composerDialog
-) {
-  console.log('');
-  console.log(
-    '=============================='
-  );
-
-  console.log(
-    'STEP 3: PUBLISH'
-  );
-
-  console.log(
-    '=============================='
-  );
-
-  console.log(
-    'Searching for the Facebook Post button...'
-  );
-
-  const postButtonCandidates = [
-    composerDialog.getByRole(
-      'button',
-      {
-        name:
-          /^(đăng|post)$/i
-      }
-    ),
-
-    composerDialog
-      .locator(
-        '[role="button"]'
-      )
-      .filter({
-        hasText:
-          /^(đăng|post)$/i
-      }),
-
-    composerDialog.locator(
-      '[role="button"][aria-label="Đăng"]'
-    ),
-
-    composerDialog.locator(
-      '[role="button"][aria-label="Post"]'
-    ),
-
-    page.getByRole(
-      'button',
-      {
-        name:
-          /^(đăng|post)$/i
-      }
+  return new Set(
+    Array.isArray(
+      progress?.preparedGroupKeys
     )
-  ];
-
-  const deadline =
-    Date.now() + 30_000;
-
-  let postButton = null;
-
-  while (
-    Date.now() < deadline &&
-    !postButton
-  ) {
-    for (
-      const candidate
-      of postButtonCandidates
-    ) {
-      const count =
-        await candidate.count();
-
-      for (
-        let index = 0;
-        index < count;
-        index += 1
-      ) {
-        const button =
-          candidate.nth(index);
-
-        const isVisible =
-          await button
-            .isVisible()
-            .catch(() => false);
-
-        if (!isVisible) {
-          continue;
-        }
-
-        const state =
-          await button.evaluate(
-            (element) => {
-              const ariaDisabled =
-                element.getAttribute(
-                  'aria-disabled'
-                );
-
-              const nativeDisabled =
-                'disabled' in element
-                  ? element.disabled
-                  : false;
-
-              const rect =
-                element
-                  .getBoundingClientRect();
-
-              return {
-                ariaDisabled,
-                nativeDisabled,
-
-                width:
-                  rect.width,
-
-                height:
-                  rect.height,
-
-                text:
-                  element.textContent
-                    ?.trim()
-              };
-            }
-          );
-
-        const hasUsableSize =
-          state.width > 0 &&
-          state.height > 0;
-
-        const isEnabled =
-          state
-            .ariaDisabled !==
-            'true' &&
-          state
-            .nativeDisabled !==
-            true;
-
-        if (
-          hasUsableSize &&
-          isEnabled
-        ) {
-          postButton =
-            button;
-
-          break;
-        }
-      }
-
-      if (postButton) {
-        break;
-      }
-    }
-
-    if (!postButton) {
-      console.log(
-        'Post button is not ready yet. Waiting...'
-      );
-
-      await page.waitForTimeout(
-        1000
-      );
-    }
-  }
-
-  if (!postButton) {
-    throw new Error(
-      [
-        'Could not find an enabled Facebook Post button.',
-        '',
-        'The composer is still open.',
-        'The post was not published.',
-        '',
-        'Inspect the Facebook window manually.'
-      ].join('\n')
-    );
-  }
-
-  console.log(
-    'Enabled Post button found.'
-  );
-
-  await postButton
-    .scrollIntoViewIfNeeded();
-
-  console.log(
-    'Publishing Facebook post...'
-  );
-
-  await postButton.click({
-    timeout: 15_000
-  });
-
-  /*
-   * Cho Facebook bắt đầu xử lý request.
-   */
-  await page.waitForTimeout(
-    1500
-  );
-
-  const publishDeadline =
-    Date.now() + 90_000;
-
-  while (
-    Date.now() <
-    publishDeadline
-  ) {
-    const dialogVisible =
-      await composerDialog
-        .isVisible()
-        .catch(() => false);
-
-    if (!dialogVisible) {
-      console.log(
-        'Composer closed after publishing.'
-      );
-
-      /*
-       * QUAN TRỌNG:
-       * Không đóng browser ngay khi composer vừa biến mất.
-       * Chờ Facebook/server hoàn tất xử lý thêm 5 giây.
-       */
-      console.log(
-        'Waiting 5 seconds for Facebook server response...'
-      );
-
-      await page.waitForTimeout(
-        5000
-      );
-
-      console.log(
-        'Post submission wait completed.'
-      );
-
-      return {
-        status:
-          'submitted'
-      };
-    }
-
-    const pendingApproval =
-      page.getByText(
-        /pending approval|awaiting approval|chờ phê duyệt|đang chờ duyệt|quản trị viên phê duyệt/i
-      );
-
-    if (
-      await pendingApproval
-        .first()
-        .isVisible()
-        .catch(() => false)
-    ) {
-      console.log(
-        'Post submitted and is waiting for group approval.'
-      );
-
-      /*
-       * Pending approval cũng chứng minh Facebook
-       * đã nhận submission, nhưng vẫn chờ thêm 5 giây
-       * trước khi đóng browser.
-       */
-      console.log(
-        'Waiting 5 seconds for Facebook server response...'
-      );
-
-      await page.waitForTimeout(
-        5000
-      );
-
-      console.log(
-        'Post submission wait completed.'
-      );
-
-      return {
-        status:
-          'pending_approval'
-      };
-    }
-
-    const errorMessage =
-      page.getByText(
-        /couldn't post|unable to post|something went wrong|không thể đăng|đã xảy ra lỗi|thử lại/i
-      );
-
-    if (
-      await errorMessage
-        .first()
-        .isVisible()
-        .catch(() => false)
-    ) {
-      throw new Error(
-        [
-          'Facebook displayed an error after clicking Post.',
-          '',
-          'Progress has not been updated.'
-        ].join('\n')
-      );
-    }
-
-    await page.waitForTimeout(
-      1000
-    );
-  }
-
-  throw new Error(
-    [
-      'The Post button was clicked, but submission could not be verified.',
-      '',
-      'Progress has not been updated.',
-      'Inspect Facebook manually before retrying.'
-    ].join('\n')
+      ? progress.preparedGroupKeys
+      : []
   );
 }
 
 
 /* =========================================================
- * PREPARE ONE GROUP
+ * PREPARE ALL GROUPS
  * ========================================================= */
 
-export async function prepareGroupPost(
-  stt,
-  groupSelection = 'next'
+export async function prepareAllGroups(
+  stt
 ) {
   const numericStt =
     validateStt(
       stt
     );
 
+  console.log('');
   console.log(
-    `Loading post data for STT ${numericStt}...`
+    '========================================'
   );
 
-  const preparedPost =
-    await getPreparedPostData(
-      numericStt
-    );
+  console.log(
+    `FACEBOOK BATCH — STT ${numericStt}`
+  );
 
   console.log(
-    'Loading assigned Facebook Groups...'
+    '========================================'
   );
+
+
+  /* =======================================================
+   * LOAD GROUPS
+   * ======================================================= */
 
   const groupResult =
     await getPostGroupsByStt(
       numericStt
     );
 
+  const groups =
+    groupResult.groups;
+
   if (
-    groupResult
-      .groups
-      .length === 0
+    !Array.isArray(groups) ||
+    groups.length === 0
   ) {
     throw new Error(
-      `Post STT ${numericStt} has no enabled groups.`
+      `STT ${numericStt} has no enabled Facebook Groups.`
     );
   }
 
-  const {
-    groupNumber,
-    targetGroup,
-    selectionMode
-  } =
-    await resolveTargetGroup(
-      numericStt,
-      groupSelection,
-      groupResult.groups
+
+  /* =======================================================
+   * LOAD PROGRESS
+   * ======================================================= */
+
+  const completedGroupKeys =
+    await getCompletedGroupKeys(
+      numericStt
     );
 
   console.log('');
-
   console.log(
-    `Preparing group ${groupNumber} of ${groupResult.groups.length}:`
+    `Total groups: ${groups.length}`
   );
 
   console.log(
-    `${targetGroup.groupKey} — ${targetGroup.name}`
-  );
-
-  console.log(
-    `URL: ${targetGroup.url}`
-  );
-
-  console.log(
-    `Selection mode: ${selectionMode}`
-  );
-
-  const composerSession =
-    await openFacebookComposer(
-      targetGroup
-    );
-
-  const {
-    page,
-    composerDialog,
-    composerEditor
-  } =
-    composerSession;
-
-
-  /* =======================================================
-   * TEXT
-   * ======================================================= */
-
-  await insertComposerContent(
-    page,
-    composerDialog,
-    composerEditor,
-    preparedPost.jd
+    `Already completed: ${completedGroupKeys.size}`
   );
 
 
   /* =======================================================
-   * IMAGE
+   * BUILD REMAINING LIST
    * ======================================================= */
 
-  await uploadComposerImage(
-    page,
-    composerDialog,
-    preparedPost
-      .image
-      .absolutePath
+  const remainingGroups =
+    groups
+      .map(
+        (
+          group,
+          index
+        ) => ({
+          group,
+
+          /*
+           * Number trong full group list.
+           */
+          groupNumber:
+            index + 1
+        })
+      )
+      .filter(
+        ({
+          group
+        }) =>
+          !completedGroupKeys.has(
+            group.groupKey
+          )
+      );
+
+  console.log(
+    `Remaining groups: ${remainingGroups.length}`
   );
-
-
-  /* =======================================================
-   * TEST MODE
-   * ======================================================= */
 
   if (
-    process.env.TEST_MODE === '1'
+    remainingGroups.length === 0
   ) {
     console.log('');
     console.log(
-      'TEST MODE'
+      'Nothing to do. All groups are already completed.'
     );
 
-    console.log(
-      'Content and image are prepared.'
-    );
-
-    console.log(
-      'The Post button has NOT been clicked.'
-    );
-
-    console.log(
-      'Inspect the Facebook composer manually.'
-    );
-
-    return {
-      preparedPost,
-      targetGroup,
-      groupNumber,
-
-      totalGroups:
-        groupResult
-          .groups
-          .length,
-
-      testMode:
-        true
-    };
+    return;
   }
 
 
   /* =======================================================
-   * PUBLISH
+   * RESULTS
    * ======================================================= */
 
-  const publishResult =
-    await publishFacebookPost(
-      page,
-      composerDialog
+  const successfulGroups = [];
+  const failedGroups = [];
+
+
+  /* =======================================================
+   * LOOP
+   * ======================================================= */
+
+  for (
+    let index = 0;
+    index < remainingGroups.length;
+    index += 1
+  ) {
+    const {
+      group,
+      groupNumber
+    } =
+      remainingGroups[index];
+
+    console.log('');
+    console.log(
+      '========================================'
+    );
+
+    console.log(
+      `BATCH ${index + 1}/${remainingGroups.length}`
+    );
+
+    console.log(
+      `OVERALL GROUP ${groupNumber}/${groups.length}`
+    );
+
+    console.log(
+      `KEY: ${group.groupKey}`
+    );
+
+    console.log(
+      `NAME: ${group.name}`
+    );
+
+    console.log(
+      `URL: ${group.url}`
+    );
+
+    console.log(
+      '========================================'
+    );
+
+
+    /* =====================================================
+     * RUN GROUP
+     * ===================================================== */
+
+    const result =
+      await runPreparePost(
+        numericStt,
+        groupNumber
+      );
+
+
+    /* =====================================================
+     * SUCCESS
+     * ===================================================== */
+
+    if (result.success) {
+      successfulGroups.push({
+        groupNumber,
+        groupKey:
+          group.groupKey,
+        name:
+          group.name,
+        url:
+          group.url
+      });
+
+      console.log('');
+      console.log(
+        `SUCCESS: ${group.groupKey}`
+      );
+    }
+
+
+    /* =====================================================
+     * FAILURE
+     * ===================================================== */
+
+    else {
+      failedGroups.push({
+        groupNumber,
+        groupKey:
+          group.groupKey,
+        name:
+          group.name,
+        url:
+          group.url,
+        exitCode:
+          result.exitCode,
+        error:
+          result.error
+      });
+
+      console.error('');
+      console.error(
+        `FAILED: ${group.groupKey}`
+      );
+
+      console.error(
+        `Name: ${group.name}`
+      );
+
+      console.error(
+        `URL: ${group.url}`
+      );
+
+      console.error(
+        `Reason: ${result.error}`
+      );
+
+      console.error('');
+      console.error(
+        'This group will NOT be marked completed.'
+      );
+
+      console.error(
+        'Automatically continuing to the next group.'
+      );
+    }
+
+
+    /* =====================================================
+     * WAIT BEFORE NEXT
+     * ===================================================== */
+
+    if (
+      index <
+      remainingGroups.length - 1
+    ) {
+      await waitBeforeNextGroup();
+    }
+  }
+
+
+  /* =======================================================
+   * FINAL PROGRESS
+   * ======================================================= */
+
+  const finalCompletedKeys =
+    await getCompletedGroupKeys(
+      numericStt
     );
 
 
   /* =======================================================
-   * PROGRESS
+   * SUMMARY
    * ======================================================= */
 
-  const updatedProgress =
-    await markGroupPrepared({
-      stt:
-        numericStt,
-
-      groupNumber,
-
-      groupKey:
-        targetGroup
-          .groupKey
-    });
-
   console.log('');
-
   console.log(
-    'Facebook post submitted successfully.'
+    '========================================'
   );
 
   console.log(
-    `Publish status: ${publishResult.status}`
+    'FACEBOOK BATCH FINISHED'
   );
 
   console.log(
-    `Prepared groups: ${updatedProgress.preparedGroupKeys.length}/${groupResult.groups.length}`
+    '========================================'
   );
-
-  /*
-   * Chỉ đóng browser SAU KHI:
-   *
-   * 1. click Post
-   * 2. Facebook xác nhận submission
-   * 3. đã chờ thêm 5 giây
-   * 4. progress được lưu
-   */
-  await composerSession
-    .context
-    .close();
 
   console.log(
-    'Facebook Chrome closed.'
+    `STT: ${numericStt}`
   );
+
+  console.log(
+    `Total groups: ${groups.length}`
+  );
+
+  console.log(
+    `Successful this run: ${successfulGroups.length}`
+  );
+
+  console.log(
+    `Failed this run: ${failedGroups.length}`
+  );
+
+  console.log(
+    `Total completed: ${finalCompletedKeys.size}/${groups.length}`
+  );
+
+
+  /* =======================================================
+   * FAILED SUMMARY
+   * ======================================================= */
+
+  if (
+    failedGroups.length > 0
+  ) {
+    console.log('');
+    console.log(
+      'FAILED GROUPS'
+    );
+
+    console.log(
+      '----------------------------------------'
+    );
+
+    failedGroups.forEach(
+      (
+        failed,
+        index
+      ) => {
+        console.log('');
+
+        console.log(
+          `${index + 1}. ${failed.groupKey}`
+        );
+
+        console.log(
+          `   Overall group: ${failed.groupNumber}/${groups.length}`
+        );
+
+        console.log(
+          `   Name: ${failed.name}`
+        );
+
+        console.log(
+          `   URL: ${failed.url}`
+        );
+
+        console.log(
+          `   Error: ${failed.error}`
+        );
+      }
+    );
+
+    console.log('');
+    console.log(
+      'Failed groups remain incomplete and can be retried later.'
+    );
+  }
 
   return {
-    preparedPost,
-    targetGroup,
-    groupNumber,
+    stt:
+      numericStt,
 
     totalGroups:
-      groupResult
-        .groups
-        .length,
+      groups.length,
 
-    publishStatus:
-      publishResult.status,
+    successfulGroups,
 
-    progress:
-      updatedProgress
+    failedGroups,
+
+    completed:
+      finalCompletedKeys.size
   };
 }
 
@@ -1218,19 +577,16 @@ async function run() {
   const stt =
     process.argv[2];
 
-  const groupSelection =
-    process.argv[3] ||
-    'next';
-
   if (!stt) {
     console.error(
       [
         'Usage:',
-        'node src/prepare-post.js <stt> [group-number|next]',
+        'node src/prepare-all.js <stt>',
         '',
         'Examples:',
-        'node src/prepare-post.js 3 1',
-        'node src/prepare-post.js 3 next'
+        'node src/prepare-all.js 1',
+        'node src/prepare-all.js 2',
+        'node src/prepare-all.js 3'
       ].join('\n')
     );
 
@@ -1239,31 +595,14 @@ async function run() {
     return;
   }
 
-  let lockHandle = null;
-
   try {
-    lockHandle =
-      await acquireJobLock({
-        stt:
-          Number(stt),
-
-        groupNumber:
-          groupSelection
-      });
-
-    console.log(
-      'Facebook job lock acquired.'
-    );
-
-    await prepareGroupPost(
-      stt,
-      groupSelection
+    await prepareAllGroups(
+      stt
     );
   } catch (error) {
     console.error('');
-
     console.error(
-      'Post preparation test failed.'
+      'Facebook batch could not start.'
     );
 
     console.error(
@@ -1271,26 +610,6 @@ async function run() {
     );
 
     process.exitCode = 1;
-  } finally {
-    if (lockHandle) {
-      try {
-        await releaseJobLock(
-          lockHandle
-        );
-
-        console.log(
-          'Facebook job lock released.'
-        );
-      } catch (error) {
-        console.error(
-          'Could not release Facebook job lock.'
-        );
-
-        console.error(
-          error.message
-        );
-      }
-    }
   }
 }
 
