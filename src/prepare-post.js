@@ -1110,7 +1110,21 @@ export async function prepareGroupPost(
       .absolutePath
   );
 
+  if (process.env.TEST_MODE === '1') {
+  console.log('');
+  console.log('TEST MODE');
+  console.log('Content and image are prepared.');
+  console.log('The Post button has NOT been clicked.');
+  console.log('Inspect the Facebook composer manually.');
 
+  return {
+    preparedPost,
+    targetGroup,
+    groupNumber,
+    totalGroups: groupResult.groups.length,
+    testMode: true
+  };
+}
   /* =======================================================
    * PUBLISH
    * ======================================================= */
